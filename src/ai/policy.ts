@@ -103,17 +103,6 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
     if (mem.stillSince && now - mem.stillSince > 250 && ai.onGround && now - mem.lastJumpAt > 700) return { intent: "jump_forward", why: `hazard underfoot (dx ${hazard.dx}) → jump clear` };
     return { intent: "advance_fire", why: `hazard underfoot (dx ${hazard.dx}) → keep moving` };
   }
-  const hazardAhead = rel.find((e) => e.category === "hazard" && e.dx >= 40 && e.dx < 220 && Math.abs(e.dy) < 48);
-  if (hazardAhead && !rel.some((e) => e.category === "hostile" && e.dx > 0 && e.dx < hazardAhead.dx && Math.abs(e.dy) < 24)) return { intent: "advance_fire", why: `bridge ahead (dx ${hazardAhead.dx}) → sprint to cross with the partner` };
-  const myLx = obs.levelScrollX + ai.x;
-  const gapAhead = mem.gaps.map((g) => (g - myLx) * sign).find((d) => d > 0 && d < 60);
-  if (gapAhead !== undefined && !rel.some((e) => e.category === "hazard" && Math.abs(e.dx - gapAhead) < 40)) {
-    if (gapAhead < 34 && ai.onGround && now - mem.lastJumpAt > 800) return { intent: "jump_forward", why: `gap where the bridge was (dx ${gapAhead.toFixed(0)}) → jump` };
-    return { intent: "advance_fire", why: `gap ahead (dx ${gapAhead.toFixed(0)}), lining up the jump` };
-  }
-  // 0b. A shot coming up from below (pill box under a ledge): sidestep, prone will not help.
-  const fromBelow = rel.find((e) => e.category === "projectile" && Math.abs(e.dx) < 24 && e.dy > 8 && e.dy < 64 && (e.vy < 0 || e.vy === 0));
-  if (fromBelow) return { intent: fromBelow.dx <= 0 ? "advance_fire" : "retreat", why: `shot from below (dx ${fromBelow.dx}, dy ${fromBelow.dy}) → sidestep` };
   let low: Rel | undefined; // a bullet that will arrive below the waist: jump it
   let body: Rel | undefined; // a bullet at body/head height: lie under it
   for (const e of rel) {
@@ -121,7 +110,7 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
     const passing = Math.abs(e.dx) < 28; // already next to us: stay down until it is gone
     if (Math.abs(e.dx) > dodge || (!e.approaching && !passing)) continue;
     // Where will it be (vertically) when it reaches us? Diagonal shots from snipers above start high.
-    const ticks = Math.abs(e.vx) >= 1 ? Math.abs(e.dx) / Math.abs(e.vx) : 0;
+    const ticks = Math.abs(e.dx) / Math.max(Math.abs(e.vx), 3); // a bullet next to us arrives now, whatever vx says
     const yAt = e.dy + e.vy * Math.min(ticks, 12);
     if (yAt < -30 || yAt > 22) continue; // will pass over the head or under the feet
     if (yAt > 10 && Math.abs(e.dx) > 12) low ??= { ...e, dy: yAt };
@@ -140,6 +129,9 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
     if (ai.onGround && now - mem.lastJumpAt > 900) return { intent: "jump_back", why: `hostile dropping in (dx ${diver.dx}, dy ${diver.dy}) → hop back` };
     return { intent: "retreat", why: `hostile dropping in (dx ${diver.dx}, dy ${diver.dy})` };
   }
+  // 1c. A shot coming up from below (pill box under a ledge): sidestep, prone will not help.
+  const fromBelow = rel.find((e) => e.category === "projectile" && Math.abs(e.dx) < 24 && e.dy > 8 && e.dy < 64 && (e.vy < 0 || e.vy === 0));
+  if (fromBelow) return { intent: fromBelow.dx <= 0 ? "advance_fire" : "retreat", why: `shot from below (dx ${fromBelow.dx}, dy ${fromBelow.dy}) → sidestep` };
   // 2. Hostile in touching range at our height: face it and shoot; if it is about to touch, hop back.
   const touch = rel.find((e) => e.category === "hostile" && Math.abs(e.dx) < r.closeDistance && Math.abs(e.dy) < 20);
   if (touch) {
@@ -147,8 +139,19 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
     if (touch.dx < 0) return { intent: "retreat", why: `hostile behind (dx ${touch.dx})` };
     return { intent: "hold_fire", why: `hostile close ahead (dx ${touch.dx})` };
   }
+  // 2b. Bridge ahead: sprint to cross with the partner. Gap where a bridge was: jump from its edge.
+  const hazardAhead = rel.find((e) => e.category === "hazard" && e.dx >= 40 && e.dx < 220 && Math.abs(e.dy) < 48);
+  if (hazardAhead && !rel.some((e) => e.category === "hostile" && e.dx > 0 && e.dx < hazardAhead.dx && Math.abs(e.dy) < 24)) return { intent: "advance_fire", why: `bridge ahead (dx ${hazardAhead.dx}) → sprint to cross with the partner` };
+  const myLx = obs.levelScrollX + ai.x;
+  const gapAhead = mem.gaps.map((g) => (g - myLx) * sign).find((d) => d > 0 && d < 60);
+  if (gapAhead !== undefined && !rel.some((e) => e.category === "hazard" && Math.abs(e.dx - gapAhead) < 40)) {
+    if (gapAhead < 34 && ai.onGround && now - mem.lastJumpAt > 800) return { intent: "jump_forward", why: `gap where the bridge was (dx ${gapAhead.toFixed(0)}) → jump` };
+    return { intent: "advance_fire", why: `gap ahead (dx ${gapAhead.toFixed(0)}), lining up the jump` };
+  }
   // 3. Sniper / turret above us: straight up when overhead, diagonal when it is ahead and above.
   const above = rel.find((e) => e.category === "hostile" && Math.abs(e.dx) < 24 && e.dy < -20 && e.dy > -90);
+  // Very close overhead, or a turret that cannot be one-shot (hp > 1): do not stand under it.
+  if (above && (above.dy > -44 || above.hp > 1)) return { intent: "retreat", why: `hostile overhead (dx ${above.dx}, dy ${above.dy}, hp ${above.hp}) → step back` };
   if (above) return { intent: "aim_up_fire", why: `hostile above (dy ${above.dy})` };
   const diag = rel.find((e) => e.category === "hostile" && e.dx >= 24 && e.dx < 96 && e.dy < -r.aimUpHeight && e.dy > -100 && Math.abs(Math.abs(e.dx) - Math.abs(e.dy)) < 40);
   if (diag) return { intent: "aim_diag_fire", why: `hostile up-ahead (dx ${diag.dx}, dy ${diag.dy}) → diagonal` };
@@ -211,7 +214,11 @@ export function actionFor(game: GameProfile, obs: Observation, intent: Intent, m
    * Shoot in a direction without walking into it: tap the direction just long enough to turn the
    * sprite (Contra keeps facing the last direction pressed), then fire standing still.
    */
+  const partnerMovingForward = obs.human.alive && obs.human.xVel === sign;
   const face = (dir: 1 | -1, reason: string, tagBase: string): Action => {
+    // A partner who keeps walking forward drags the screen (and explodes bridges behind them):
+    // never stand still then, walk along instead.
+    if (partnerMovingForward && dir === sign) return { hold: [...walk(fwd), ...holdFire], turbo, tag: `${fwd}+${fire}`, reason: `${reason}, partner moving → keep up` };
     const key: Button = dir > 0 ? "RIGHT" : "LEFT";
     if (mem.facing !== dir && !mem.turnUntil) mem.turnUntil = now + 130;
     if (mem.turnUntil && now < mem.turnUntil) return { hold: [key, ...holdFire], turbo, tag: `${tagBase}:turn`, reason: `${reason} (turning)` };

@@ -203,6 +203,9 @@ export class BuddyBrain {
       intent = h.intent;
       why = h.why;
     }
+    // A jump press is held for a few frames so the emulator registers it even across a tick boundary.
+    if (intent === "jump_forward" || intent === "jump_back") this.jumpHold = { intent, until: now + 120 };
+    else if (this.jumpHold && now < this.jumpHold.until) intent = this.jumpHold.intent;
     // A prone dodge is held a little after the trigger disappears so the bullet actually passes.
     if (intent !== "prone_fire" && this.mem.proneSince) {
       if (now - this.mem.proneSince < 300 && !urgent) intent = "prone_fire";
@@ -214,6 +217,7 @@ export class BuddyBrain {
   }
 
   private jevSticky: { action: JevAction; since: number } | undefined;
+  private jumpHold: { intent: "jump_forward" | "jump_back"; until: number } | undefined;
 
   /**
    * Jev's distribution is often flat (top option 20–40%). Twitchy one-off actions (jumps, prone)
