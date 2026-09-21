@@ -4,7 +4,7 @@ import type { GameProfile } from "../games/registry.js";
 import { Coach } from "./coach.js";
 import { jevDecide, jevEnabled, type JevAction, type JevDecision } from "./jev.js";
 import { observe, type Observation } from "./observe.js";
-import { actionFor, heuristicIntent, IDLE, newMemory, sameAction, type Action, type Button, type Intent, type PolicyMemory } from "./policy.js";
+import { actionFor, heuristicIntent, IDLE, newMemory, sameAction, survivalIntent, type Action, type Button, type Intent, type PolicyMemory } from "./policy.js";
 
 const log = logger("buddy");
 
@@ -75,8 +75,8 @@ export class BuddyBrain {
   /** Called for every state report from the browser. */
   onObservation(bytes: Uint8Array) {
     if (this.stopped) return;
-    const obs = observe(this.game, bytes);
     const prev = this.lastObs;
+    const obs = observe(this.game, bytes, prev);
     this.lastObs = obs;
     this.stats.ticks++;
     const now = obs.at;
@@ -91,12 +91,21 @@ export class BuddyBrain {
     if (prev && obs.phase === "playing") {
       if (prev.ai.alive && !obs.ai.alive) {
         this.stats.aiDeaths++;
-        this.remember("buddy died");
-        this.op("system", `buddy down (lives ${obs.ai.lives})`);
+        const near = prev.enemies
+          .map((e) => ({ k: e.category, t: e.type, dx: e.x - prev.ai.x, dy: e.y - prev.ai.y, vx: e.vx }))
+          .sort((a, b) => Math.abs(a.dx) + Math.abs(a.dy) - (Math.abs(b.dx) + Math.abs(b.dy)))
+          .slice(0, 3)
+          .map((e) => `${e.k}#${e.t.toString(16)}(dx ${e.dx}, dy ${e.dy}, vx ${e.vx})`)
+          .join(" ");
+        const cause = `doing ${this.last.tag}${this.last.reason ? ` [${this.last.reason}]` : ""}; nearby: ${near || "nothing"}; ground=${prev.ai.onGround}`;
+        this.remember(`buddy died — ${cause}`);
+        this.op("system", `buddy down (lives ${obs.ai.lives}) — ${cause}`);
+        log.info(`death: ${cause}`);
       }
       if (prev.human.alive && !obs.human.alive) {
         this.stats.humanDeaths++;
         this.remember("partner died");
+        this.op("system", `partner down (lives ${obs.human.lives})`);
       }
       if (prev.level !== obs.level) this.remember(`level ${obs.level + 1}`);
     }
@@ -161,17 +170,30 @@ export class BuddyBrain {
         .finally(() => (this.jevInflight = false));
     }
 
-    // 2. Pick the intent: fresh + confident Jev answer wins, else coach, else heuristics.
+    // 2. Pick the intent. Survival reflexes always win (a model round trip is too slow for a bullet);
+    //    then a fresh, confident Jev answer; then the coach's plan; then the built-in heuristics.
     let intent: Intent;
     let src: "jev" | "coach" | "reflex" = "reflex";
     let why = "";
     const fresh = this.jev && now - this.jev.at < 1500 ? this.jev.decision : undefined;
-    if (fresh && fresh.jumpNow > 0.7 && obs.ai.onGround && now - this.mem.lastJumpAt > 800) {
+    const urgent = survivalIntent(this.game, obs, this.mem, now);
+    if (urgent) {
+      intent = urgent.intent;
+      why = urgent.why;
+    } else if (fresh && fresh.proneNow > 0.7 && obs.ai.onGround) {
+      intent = "prone_fire";
+      src = "jev";
+      why = `prone_now ${(fresh.proneNow * 100).toFixed(0)}%`;
+    } else if (fresh && fresh.jumpNow > 0.7 && obs.ai.onGround && now - this.mem.lastJumpAt > 800) {
       intent = "jump_forward";
       src = "jev";
-      why = `dodge (jump_now ${(fresh.jumpNow * 100).toFixed(0)}%)`;
-    } else if (fresh && fresh.confidence >= 0.3) {
-      intent = fresh.action;
+      why = `jump_now ${(fresh.jumpNow * 100).toFixed(0)}%`;
+    } else if (fresh && fresh.partnerInDanger > 0.75 && obs.human.alive && Math.abs(obs.human.x - obs.ai.x) > this.game.reflex.closeDistance) {
+      intent = "follow_partner";
+      src = "jev";
+      why = `partner in danger ${(fresh.partnerInDanger * 100).toFixed(0)}%`;
+    } else if (fresh && this.jevPick(fresh)) {
+      intent = this.jevPick(fresh)!;
       src = "jev";
     } else if (this.coachIntent !== "auto") {
       intent = this.coachIntent;
@@ -181,16 +203,35 @@ export class BuddyBrain {
       intent = h.intent;
       why = h.why;
     }
-    // Safety net regardless of source: an enemy directly above still gets shot.
-    const h = heuristicIntent(this.game, obs, this.mem, now);
-    if (h.intent === "aim_up_fire" && intent !== "aim_up_fire") {
-      intent = "aim_up_fire";
-      src = "reflex";
-      why = h.why;
+    // A prone dodge is held a little after the trigger disappears so the bullet actually passes.
+    if (intent !== "prone_fire" && this.mem.proneSince) {
+      if (now - this.mem.proneSince < 300 && !urgent) intent = "prone_fire";
+      else this.mem.proneSince = 0;
     }
     const action = actionFor(this.game, obs, intent, this.mem, now);
     action.reason = why || action.reason;
     this.apply(action, src);
+  }
+
+  private jevSticky: { action: JevAction; since: number } | undefined;
+
+  /**
+   * Jev's distribution is often flat (top option 20–40%). Twitchy one-off actions (jumps, prone)
+   * need a clear majority; steady ones (advance / follow / hold / aim) are accepted at a lower bar,
+   * and the previous pick is kept unless the new one beats it by a margin (hysteresis).
+   */
+  private jevPick(d: JevDecision): JevAction | undefined {
+    const p = d.probabilities;
+    const twitchy = new Set<JevAction>(["jump_forward", "jump_back", "prone_fire", "retreat"]);
+    const prev = this.jevSticky;
+    const prevP = prev ? (p[prev.action] ?? 0) : 0;
+    const bestP = p[d.action] ?? 0;
+    let pick: JevAction | undefined;
+    if (prev && Date.now() - prev.since < 2500 && prevP >= 0.2 && bestP - prevP < 0.15) pick = prev.action;
+    else if (bestP >= (twitchy.has(d.action) ? 0.5 : 0.3)) pick = d.action;
+    else if (prev && prevP >= 0.2) pick = prev.action;
+    if (pick && pick !== prev?.action) this.jevSticky = { action: pick, since: Date.now() };
+    return pick;
   }
 
   private apply(action: Action, src: "jev" | "coach" | "reflex") {

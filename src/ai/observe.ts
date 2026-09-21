@@ -1,4 +1,4 @@
-import type { GameProfile } from "../games/registry.js";
+import type { EnemyCategory, GameProfile } from "../games/registry.js";
 
 /**
  * Turns the raw RAM bytes the browser reports into a game-agnostic observation, using only the
@@ -25,6 +25,13 @@ export interface EnemyObs {
   y: number;
   type: number;
   hp: number;
+  category: EnemyCategory;
+  /**
+   * Velocity per tick RELATIVE to the buddy (change of dx/dy since the previous observation of the
+   * same slot+type). Screen scrolling cancels out; 0 when the object was not seen before.
+   */
+  vx: number;
+  vy: number;
 }
 
 export interface Observation {
@@ -38,6 +45,8 @@ export interface Observation {
   human: PlayerObs;
   enemies: EnemyObs[];
   screen: { width: number; height: number };
+  /** Horizontal level position of the left screen edge (0 when the profile has no scroll fields). */
+  levelScrollX: number;
   at: number;
 }
 
@@ -98,11 +107,20 @@ function playerOf(game: GameProfile, ram: RamView, idx: 0 | 1, phase: string): P
   };
 }
 
-export function observe(game: GameProfile, bytes: Uint8Array): Observation {
+function categoryOf(game: GameProfile, level: number, type: number): EnemyCategory {
+  const t = game.enemyTypes;
+  if (!t) return "hostile";
+  const key = `0x${type.toString(16).padStart(2, "0")}`;
+  return t.levelTypes?.[String(level)]?.[key] ?? t.shared[key] ?? t.default ?? "hostile";
+}
+
+export function observe(game: GameProfile, bytes: Uint8Array, prev?: Observation): Observation {
   const ram = new RamView(bytes, game.ramRanges);
   const phase = phaseOf(game, ram);
   const aiIdx = (game.players.ai - 1) as 0 | 1;
   const humanIdx = (game.players.human - 1) as 0 | 1;
+  const level = game.ram.level ? ram.byte(parseAddr(game.ram.level)) : 0;
+  const aiNow = playerOf(game, ram, aiIdx, phase);
   const enemies: EnemyObs[] = [];
   const e = game.ram.enemies;
   if (e) {
@@ -113,21 +131,31 @@ export function observe(game: GameProfile, bytes: Uint8Array): Observation {
     const eh = e.hp ? parseAddr(e.hp) : -1;
     for (let i = 0; i < e.count; i++) {
       if (ram.byte(routine + i) === 0) continue;
-      enemies.push({ slot: i, x: ram.byte(ex + i), y: ram.byte(ey + i), type: et >= 0 ? ram.byte(et + i) : 0, hp: eh >= 0 ? ram.byte(eh + i) : 0 });
+      const type = et >= 0 ? ram.byte(et + i) : 0;
+      const category = categoryOf(game, level, type);
+      if (category === "ignore") continue;
+      const x = ram.byte(ex + i);
+      const y = ram.byte(ey + i);
+      const was = prev?.enemies.find((p) => p.slot === i && p.type === type);
+      const vx = was ? x - aiNow.x - (was.x - prev!.ai.x) : 0;
+      const vy = was ? y - aiNow.y - (was.y - prev!.ai.y) : 0;
+      enemies.push({ slot: i, x, y, type, hp: eh >= 0 ? ram.byte(eh + i) : 0, category, vx: Math.abs(vx) > 48 ? 0 : vx, vy: Math.abs(vy) > 48 ? 0 : vy });
     }
   }
   const scrollType = game.ram.scrollType ? ram.byte(parseAddr(game.ram.scrollType)) : 0;
+  const levelScrollX = game.ram.screenNumber && game.ram.screenScroll ? ram.byte(parseAddr(game.ram.screenNumber)) * 256 + ram.byte(parseAddr(game.ram.screenScroll)) : 0;
   return {
     game: game.id,
     frame: game.ram.frame ? ram.byte(parseAddr(game.ram.frame)) : 0,
     phase,
     playerMode: game.ram.playerMode ? ram.byte(parseAddr(game.ram.playerMode)) : 1,
-    level: game.ram.level ? ram.byte(parseAddr(game.ram.level)) : 0,
+    level,
     levelDirection: scrollType === 1 ? "up" : "right",
-    ai: playerOf(game, ram, aiIdx, phase),
+    ai: aiNow,
     human: playerOf(game, ram, humanIdx, phase),
     enemies,
     screen: game.screen,
+    levelScrollX,
     at: Date.now(),
   };
 }

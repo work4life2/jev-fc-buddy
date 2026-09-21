@@ -109,7 +109,7 @@ export function getConfig(): Config {
       viaRelay: !env("TYPESAFE_BASE_URL") && !env("TYPESAFE_API_KEY"),
     },
     ai: {
-      observeHz: envNum("AI_OBSERVE_HZ", 12),
+      observeHz: envNum("AI_OBSERVE_HZ", 24),
       jevHz: envNum("AI_JEV_HZ", 4),
       coachIntervalSeconds: envNum("AI_COACH_INTERVAL_SECONDS", 10),
       coachVision: env("AI_COACH_VISION", "1") !== "0",

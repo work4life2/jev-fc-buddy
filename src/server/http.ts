@@ -127,7 +127,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     return;
   }
   if (req.method === "GET" && p === "/api/games") {
-    json(res, 200, { games: playableGames().map(publicGame), sessionMinutes: cfg.coins.sessionMinutes });
+    json(res, 200, { games: playableGames().map(publicGame), sessionMinutes: cfg.coins.sessionMinutes, observeHz: cfg.ai.observeHz });
     return;
   }
   if (req.method === "POST" && p === "/api/redeem") {

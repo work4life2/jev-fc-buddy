@@ -28,6 +28,7 @@
     "scrollType": "0x41",
     "locationType": "0x40",
     "screenNumber": "0x64",
+    "screenScroll": "0x65",
     "bossDefeated": "0x3b",
     "enemies": { "count": 16, "routine": "0x04b8", "x": "0x033e", "y": "0x0324", "type": "0x0528", "hp": "0x0578" }
   },
@@ -46,11 +47,31 @@
     "selectButton": "SELECT",
     "startButton": "START"
   },
+  "enemyTypes": {
+    "note": "ENEMY_TYPE ($0528) ids from the nes-contra-us glossary. Shared ids 0x00-0x0f are the same on every level; 0x10+ depend on the level (levelTypes, keyed by CURRENT_LEVEL). hazard = ground that gives way (exploding bridge): never stand on it.",
+    "shared": {
+      "0x00": "item", "0x01": "projectile", "0x02": "hostile", "0x03": "item", "0x04": "hostile", "0x05": "hostile",
+      "0x06": "hostile", "0x07": "hostile", "0x08": "hostile", "0x0a": "obstacle", "0x0b": "projectile", "0x0c": "hostile",
+      "0x0e": "hostile", "0x0f": "projectile"
+    },
+    "levelTypes": {
+      "0": { "0x10": "hostile", "0x11": "obstacle", "0x12": "hazard" },
+      "1": { "0x12": "projectile", "0x13": "hostile", "0x15": "hostile", "0x16": "hostile", "0x17": "hostile", "0x18": "hostile", "0x19": "ignore" },
+      "2": { "0x10": "obstacle", "0x12": "obstacle", "0x13": "projectile" },
+      "3": { "0x12": "projectile", "0x13": "hostile", "0x15": "hostile", "0x16": "hostile", "0x17": "hostile", "0x18": "hostile", "0x19": "ignore" },
+      "4": { "0x10": "ignore", "0x11": "projectile", "0x15": "hostile" },
+      "5": { "0x13": "hostile" },
+      "6": { "0x18": "ignore" }
+    },
+    "default": "hostile"
+  },
   "reflex": {
     "followDistance": 56,
     "engageDistance": 120,
     "closeDistance": 36,
     "aimUpHeight": 28,
+    "dodgeDistance": 80,
+    "itemDistance": 96,
     "turboFire": true
   },
   "coachBrief": "Contra (NES, 1988, Konami) is a two-player run-and-gun side-scroller. Players advance right (some stages scroll up or are 3D base corridors where you shoot walls until the core opens). A = jump, B = fire; holding UP aims up, DOWN lies prone (shoots low), diagonal aims diagonally. Falling into a pit kills; water is safe (you wade). Enemy bullets kill in one hit; there is no health. Flying weapon capsules (red falcon) give power-ups: S (spread) is best, M (machine gun), L (laser), F (flame), R (rapid), B (barrier/invincibility). Stage 1 Jungle: run right, jump over bushes, destroy the wall sensors at the end. Stage 2 Base: shoot the wall cores from the front, dodge rolling grenades. Stage 3 Waterfall: vertical, climb by jumping between ledges, boss at top. Both players share screen scroll: if one runs far ahead the other is dragged. The AI is player 2; the human is player 1. The AI's job is to be a helpful teammate: keep near the human, cover them, kill threats, never hog the scroll, and let the human lead."

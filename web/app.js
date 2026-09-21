@@ -17,9 +17,10 @@
   }
 
   async function loadGames() {
-    const { games, sessionMinutes } = await api("/api/games");
+    const { games, sessionMinutes, observeHz } = await api("/api/games");
     state.games = games;
     state.sessionMinutes = sessionMinutes;
+    if (observeHz) state.obsHz = observeHz;
     const box = $("games");
     box.innerHTML = "";
     for (const g of games) {

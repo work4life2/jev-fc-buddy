@@ -10,6 +10,8 @@ const log = logger("games");
  * ROM is, which RAM addresses carry the observable state, how to start a 2-player game, and what to
  * tell the coach model about the game. Nothing outside games/ is specific to any single title.
  */
+export type EnemyCategory = "hostile" | "projectile" | "item" | "obstacle" | "hazard" | "ignore";
+
 export interface GameProfile {
   id: string;
   title: string;
@@ -42,13 +44,17 @@ export interface GameProfile {
     scrollType?: string;
     locationType?: string;
     screenNumber?: string;
+    /** Pixels scrolled into screenNumber; levelX = screenNumber*256 + screenScroll + screen x. */
+    screenScroll?: string;
     bossDefeated?: string;
     enemies?: { count: number; routine: string; x: string; y: string; type?: string; hp?: string };
   };
   phases: Record<string, { gameRoutine?: number[]; levelRoutine?: number[] }>;
   playerState: { falling: number; normal: number; dead: number; frozen: number };
+  /** ENEMY_TYPE id → category. Ids above the shared range differ per level. */
+  enemyTypes?: { shared: Record<string, EnemyCategory>; levelTypes?: Record<string, Record<string, EnemyCategory>>; default?: EnemyCategory; note?: string };
   start: { requirePlayerMode?: number; selectButton: string; startButton: string; note?: string };
-  reflex: { followDistance: number; engageDistance: number; closeDistance: number; aimUpHeight: number; turboFire: boolean };
+  reflex: { followDistance: number; engageDistance: number; closeDistance: number; aimUpHeight: number; dodgeDistance?: number; itemDistance?: number; turboFire: boolean };
   coachBrief: string;
 }
 

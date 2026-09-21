@@ -42,7 +42,7 @@ const ws = new WebSocket(`${base.replace(/^http/, "ws")}/ws?token=${s.token}`);
 const held = new Set();
 const turbo = new Set();
 const BTN = { A: 0, B: 1, SELECT: 2, START: 3, UP: 4, DOWN: 5, LEFT: 6, RIGHT: 7 };
-const stats = { acts: 0, ops: 0, says: 0, phases: [] };
+const stats = { acts: 0, ops: 0, says: 0, phases: [], buddyDeaths: 0, partnerDeaths: 0 };
 ws.on("message", (raw) => {
   const m = JSON.parse(raw.toString());
   if (m.type === "act") {
@@ -53,6 +53,8 @@ ws.on("message", (raw) => {
     for (const b of m.turbo) turbo.add(BTN[b]);
   } else if (m.type === "op") {
     stats.ops++;
+    if (m.src === "system" && m.text.startsWith("buddy down")) stats.buddyDeaths++;
+    if (m.src === "system" && m.text.startsWith("partner down")) stats.partnerDeaths++;
     console.log(`  [${m.src}] ${m.text}${m.detail?.top ? `  (${m.detail.top})` : ""}`);
   } else if (m.type === "say") {
     stats.says++;
@@ -76,9 +78,11 @@ const ranges = game.ramRanges;
 const started = Date.now();
 const mem = nes.cpu.mem;
 
+let tick = 0;
 const timer = setInterval(() => {
-  // 60 fps in 5-frame bursts (12 Hz timer)
-  for (let k = 0; k < 5; k++) {
+  // 60 fps at a 24 Hz timer: 2 or 3 frames per tick
+  const burst = tick++ % 2 ? 3 : 2;
+  for (let k = 0; k < burst; k++) {
     for (let b = 0; b < 8; b++) {
       let down = held.has(b);
       if (turbo.has(b)) down = (frame >> 2) & 1;
@@ -106,11 +110,11 @@ const timer = setInterval(() => {
     o += b - a;
   }
   if (ws.readyState === 1) ws.send(JSON.stringify({ type: "obs", ram: out.toString("base64") }));
-}, 1000 / 12);
+}, 1000 / 24);
 
 await new Promise((r) => setTimeout(r, seconds * 1000));
 clearInterval(timer);
 ws.close();
-console.log(`\nsummary: frames=${frame} acts=${stats.acts} ops=${stats.ops} says=${stats.says} phases=${stats.phases.join("→")}`);
+console.log(`\nsummary: frames=${frame} acts=${stats.acts} ops=${stats.ops} says=${stats.says} buddyDeaths=${stats.buddyDeaths} partnerDeaths=${stats.partnerDeaths} phases=${stats.phases.join("→")}`);
 console.log(`ram: gameRoutine=${mem[0x18]} levelRoutine=${mem[0x2c]} playerMode=${mem[0x22]} p1=(${mem[0x334]},${mem[0x31a]}) p2=(${mem[0x335]},${mem[0x31b]}) lives=${mem[0x32]}/${mem[0x33]} state=${mem[0x90]}/${mem[0x91]}`);
 process.exit(0);
