@@ -91,7 +91,7 @@ export interface GapInfo {
   inside: boolean;
   partner: "behind" | "near" | "on" | "beyond" | "none";
   /** bridge = crossable while it explodes; pit = never passable at this height. */
-  kind: "bridge" | "pit";
+  kind: "bridge" | "pit" | "hop";
 }
 
 /** The nearest known pit ahead (profile terrain + hazards remembered this level), if within `range`. */
@@ -230,7 +230,12 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
   // 2b. Pits (bridges that explode once crossed). Inside: never stop. Ahead: cross together with the
   //     partner; if the partner is already far beyond, the bridge is gone — do not walk in.
   const gap = gapAhead(game, obs, mem, sign);
-  if (gap && gap.kind === "pit") {
+  if (gap && gap.kind === "hop") {
+    // A narrow drop: run at it and jump from the edge; never stop on the edge.
+    if (gap.inside && !ai.onGround) return undefined;
+    if (gap.dxStart <= 30 && gap.dxStart > -4 && ai.onGround && now - mem.lastJumpAt > 800) return { intent: "jump_forward", why: `drop ahead (dx ${gap.dxStart.toFixed(0)}, ${gap.width}px) → jump` };
+    if (gap.dxStart <= 60) return { intent: "advance_fire", why: `drop in ${gap.dxStart.toFixed(0)}px → run up to it` };
+  } else if (gap && gap.kind === "pit") {
     // Dead end at this height: never walk in; get up to the partner's ledge instead.
     if (gap.dxStart < 40) {
       if (obs.human.alive && obs.human.y < ai.y - 40 && ai.onGround && now - mem.lastJumpAt > 900) return { intent: "jump_forward", why: `pit ahead (dx ${gap.dxStart.toFixed(0)}), partner above → try to climb` };

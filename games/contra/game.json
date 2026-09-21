@@ -68,8 +68,8 @@
   },
   "terrain": {
     "note": "Level-x ranges (screenNumber*256 + screenScroll + screen x) of ground that gives way once crossed: the exploding bridges. Measured with scripts/scan-hazards.mjs. A lagging player finds only a pit here.",
-    "gaps": { "0": [[768, 912], [1056, 1200], [1944, 1990, 180, 240, "pit"], [2124, 2170, 180, 240, "pit"]] },
-    "gapNote": "[x1, x2] = bridge (crossable while it explodes); [x1, x2, yMin, yMax, \"pit\"] = drop that only applies at that height: the low river route ends here, only the upper ledges continue."
+    "gaps": { "0": [[768, 912], [1056, 1200], [1940, 1972, 180, 240, "hop"], [2120, 2152, 180, 240, "hop"]] },
+    "gapNote": "[x1, x2] = bridge (crossable while it explodes); [x1, x2, yMin, yMax, kind] applies only at that height: \"hop\" = narrow drop on the low river route, jump it from the edge; \"pit\" = impassable, climb to the partner's ledge instead."
   },
   "reflex": {
     "followDistance": 56,
