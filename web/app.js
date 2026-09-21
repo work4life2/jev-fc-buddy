@@ -63,6 +63,9 @@
   $("btnQuit").onclick = () => { if (state.ws) state.ws.send(JSON.stringify({ type: "quit" })); showOverlay("Session ended", "Thanks for playing. Insert another coin to continue where you left off."); };
   $("btnMute").onclick = () => { state.muted = !state.muted; $("btnMute").textContent = state.muted ? "🔇" : "🔊"; };
 
+  // Gamepad detection on the gate page too, so the mapping can be set before the first coin.
+  window.addEventListener("gamepadconnected", (e) => { if (!state.nes) onPad(e.gamepad); });
+
   // ───────────────────────── session ─────────────────────────
   async function startSession() {
     $("gateError").hidden = true;
@@ -275,13 +278,101 @@
   }
 
   // ───────────────────────── human input ─────────────────────────
+  // Keyboard: WASD move · J fire · K jump · Enter start · Shift select (arrows / Z / X also work).
+  const KEYS = {
+    KeyW: BTN.UP, KeyS: BTN.DOWN, KeyA: BTN.LEFT, KeyD: BTN.RIGHT, KeyJ: BTN.B, KeyK: BTN.A,
+    ArrowUp: BTN.UP, ArrowDown: BTN.DOWN, ArrowLeft: BTN.LEFT, ArrowRight: BTN.RIGHT, KeyZ: BTN.B, KeyX: BTN.A,
+    Enter: BTN.START, ShiftRight: BTN.SELECT, ShiftLeft: BTN.SELECT,
+  };
   function setupInput(game) {
     const c = game.players.human;
-    const keys = { ArrowUp: BTN.UP, ArrowDown: BTN.DOWN, ArrowLeft: BTN.LEFT, ArrowRight: BTN.RIGHT, KeyX: BTN.A, KeyZ: BTN.B, Enter: BTN.START, ShiftRight: BTN.SELECT, ShiftLeft: BTN.SELECT, KeyK: BTN.A, KeyJ: BTN.B };
-    window.addEventListener("keydown", (e) => { if (e.code in keys) { state.nes.buttonDown(c, keys[e.code]); e.preventDefault(); } });
-    window.addEventListener("keyup", (e) => { if (e.code in keys) { state.nes.buttonUp(c, keys[e.code]); e.preventDefault(); } });
-    window.addEventListener("gamepadconnected", (e) => { state.padIndex = e.gamepad.index; $("hudPad").textContent = `🎮 ${e.gamepad.id.slice(0, 24)}`; pushOp("system", "gamepad connected", e.gamepad.id.slice(0, 40)); });
+    window.addEventListener("keydown", (e) => { if (e.code in KEYS && !mapping.capturing) { state.nes.buttonDown(c, KEYS[e.code]); e.preventDefault(); } });
+    window.addEventListener("keyup", (e) => { if (e.code in KEYS) { state.nes.buttonUp(c, KEYS[e.code]); e.preventDefault(); } });
+    window.addEventListener("gamepadconnected", (e) => onPad(e.gamepad));
     window.addEventListener("gamepaddisconnected", () => { state.padIndex = null; $("hudPad").textContent = "⌨️ keyboard"; });
+    // Some browsers only surface an already-plugged pad once it is polled.
+    const gps = navigator.getGamepads ? navigator.getGamepads() : [];
+    for (const gp of gps) if (gp) onPad(gp);
+  }
+  function onPad(gp) {
+    state.padIndex = gp.index;
+    state.padId = gp.id;
+    mapping.current = loadMapping(gp.id);
+    $("hudPad").textContent = `🎮 ${gp.id.slice(0, 22)}`;
+    $("btnMap").hidden = false;
+    pushOp("system", "gamepad connected", `${gp.id.slice(0, 40)}${mapping.current.custom ? " · custom mapping" : " · standard mapping"}`);
+  }
+
+  // ───────────────────────── gamepad mapping (per gamepad id, in localStorage) ─────────────────────────
+  const NES_ORDER = ["UP", "DOWN", "LEFT", "RIGHT", "A", "B", "START", "SELECT"];
+  const NES_LABEL = { UP: "Up", DOWN: "Down", LEFT: "Left", RIGHT: "Right", A: "A · jump", B: "B · fire", START: "Start", SELECT: "Select" };
+  // A binding is {t:"b", i} (button) or {t:"a", i, d} (axis index, direction). Several bindings per NES button.
+  const DEFAULT_MAP = {
+    UP: [{ t: "b", i: 12 }, { t: "a", i: 1, d: -1 }], DOWN: [{ t: "b", i: 13 }, { t: "a", i: 1, d: 1 }],
+    LEFT: [{ t: "b", i: 14 }, { t: "a", i: 0, d: -1 }], RIGHT: [{ t: "b", i: 15 }, { t: "a", i: 0, d: 1 }],
+    A: [{ t: "b", i: 0 }, { t: "b", i: 3 }], B: [{ t: "b", i: 2 }, { t: "b", i: 1 }, { t: "b", i: 5 }, { t: "b", i: 7 }],
+    START: [{ t: "b", i: 9 }], SELECT: [{ t: "b", i: 8 }],
+  };
+  const mapping = { current: { map: DEFAULT_MAP, custom: false }, capturing: null, snapshot: null };
+  const mapKey = (id) => `fcbuddy.padmap.${id}`;
+  function loadMapping(id) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(mapKey(id)) || "null");
+      if (saved && typeof saved === "object") return { map: { ...DEFAULT_MAP, ...saved }, custom: true };
+    } catch (_) { /* ignore */ }
+    return { map: DEFAULT_MAP, custom: false };
+  }
+  function saveMapping() {
+    if (!state.padId) return;
+    localStorage.setItem(mapKey(state.padId), JSON.stringify(mapping.current.map));
+    mapping.current.custom = true;
+  }
+  function bindingLabel(list) {
+    return (list || []).map((b) => (b.t === "b" ? `B${b.i}` : `axis${b.i}${b.d > 0 ? "+" : "−"}`)).join(", ") || "—";
+  }
+  function bindingActive(gp, b) {
+    if (b.t === "b") return Boolean(gp.buttons[b.i] && gp.buttons[b.i].pressed);
+    const v = gp.axes[b.i] || 0;
+    return b.d > 0 ? v > 0.5 : v < -0.5;
+  }
+  function renderMapPanel() {
+    const rows = $("mapRows");
+    rows.innerHTML = "";
+    for (const n of NES_ORDER) {
+      const row = document.createElement("div");
+      row.className = "mapRow";
+      row.dataset.nes = n;
+      row.innerHTML = `<span class="mapName">${NES_LABEL[n]}</span><span class="mapBind">${bindingLabel(mapping.current.map[n])}</span><button class="ghost mapSet" data-nes="${n}">${mapping.capturing === n ? "press a button…" : "Set"}</button>`;
+      rows.appendChild(row);
+    }
+    $("mapPad").textContent = state.padId ? `${state.padId.slice(0, 48)}${mapping.current.custom ? " · saved custom mapping" : " · standard mapping"}` : "no gamepad connected — press any button on it";
+  }
+  const openMap = () => { $("mapPanel").hidden = false; renderMapPanel(); };
+  $("btnMap").onclick = openMap;
+  $("btnMapGate").onclick = openMap;
+  // On the gate page there is no emulator loop yet, so poll the pad while the panel is open.
+  setInterval(() => { if (!$("mapPanel").hidden && !state.nes) pollGamepad(); }, 50);
+  $("btnMapClose").onclick = () => { $("mapPanel").hidden = true; mapping.capturing = null; };
+  $("btnMapReset").onclick = () => { if (state.padId) localStorage.removeItem(mapKey(state.padId)); mapping.current = { map: DEFAULT_MAP, custom: false }; renderMapPanel(); };
+  $("mapRows").addEventListener("click", (e) => {
+    const n = e.target.dataset && e.target.dataset.nes;
+    if (!n) return;
+    const gp = state.padIndex !== null && navigator.getGamepads()[state.padIndex];
+    if (!gp) return;
+    mapping.capturing = n;
+    mapping.snapshot = { buttons: gp.buttons.map((b) => b.pressed), axes: [...gp.axes] };
+    renderMapPanel();
+  });
+  /** While capturing: the first button press / axis push that was not already active becomes the binding. */
+  function captureFrom(gp) {
+    const snap = mapping.snapshot;
+    for (let i = 0; i < gp.buttons.length; i++) if (gp.buttons[i].pressed && !snap.buttons[i]) return { t: "b", i };
+    for (let i = 0; i < gp.axes.length; i++) {
+      const v = gp.axes[i], was = snap.axes[i] || 0;
+      if (v > 0.6 && was <= 0.6) return { t: "a", i, d: 1 };
+      if (v < -0.6 && was >= -0.6) return { t: "a", i, d: -1 };
+    }
+    return null;
   }
 
   const padPrev = new Array(8).fill(false);
@@ -289,18 +380,30 @@
     if (state.padIndex === null || !navigator.getGamepads) return;
     const gp = navigator.getGamepads()[state.padIndex];
     if (!gp) return;
+    if (mapping.capturing) {
+      const b = captureFrom(gp);
+      if (b) {
+        const nes = mapping.capturing;
+        mapping.current.map = { ...mapping.current.map, [nes]: [b] };
+        mapping.capturing = null;
+        saveMapping();
+        renderMapPanel();
+        pushOp("system", `gamepad: ${NES_LABEL[nes]} → ${bindingLabel([b])}`, "");
+      }
+      return; // do not feed the game while assigning
+    }
+    if (!state.nes || !state.session) return;
     const c = state.session.game.players.human;
-    const b = (i) => Boolean(gp.buttons[i] && gp.buttons[i].pressed);
-    const ax = gp.axes[0] || 0, ay = gp.axes[1] || 0;
+    const m = mapping.current.map;
     const now = [
-      b(0) || b(3),                 // A (jump)
-      b(1) || b(2) || b(5) || b(7), // B (fire)
-      b(8),                         // select
-      b(9),                         // start
-      b(12) || ay < -0.5,           // up
-      b(13) || ay > 0.5,            // down
-      b(14) || ax < -0.5,           // left
-      b(15) || ax > 0.5,            // right
+      (m.A || []).some((b) => bindingActive(gp, b)),
+      (m.B || []).some((b) => bindingActive(gp, b)),
+      (m.SELECT || []).some((b) => bindingActive(gp, b)),
+      (m.START || []).some((b) => bindingActive(gp, b)),
+      (m.UP || []).some((b) => bindingActive(gp, b)),
+      (m.DOWN || []).some((b) => bindingActive(gp, b)),
+      (m.LEFT || []).some((b) => bindingActive(gp, b)),
+      (m.RIGHT || []).some((b) => bindingActive(gp, b)),
     ];
     for (let i = 0; i < 8; i++) {
       if (now[i] === padPrev[i]) continue;

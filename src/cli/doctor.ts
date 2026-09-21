@@ -4,7 +4,6 @@ import { getConfig } from "../config.js";
 import { modelRuntime, resolveModel } from "../agent/session.js";
 import { jevEnabled, jevPing } from "../ai/jev.js";
 import { listGames, romAvailable } from "../games/registry.js";
-import { relayHasModel } from "../relay.js";
 import { getModels } from "../runtimeConfig.js";
 import { termix } from "../termix/client.js";
 
@@ -30,29 +29,27 @@ export async function runDoctor(opts: { network?: boolean; termix?: boolean } = 
   add("games", games.length > 0, games.map((g) => `${g.id}${romAvailable(g) ? "" : " (ROM missing)"}`).join(", ") || "none in games/");
   for (const g of games) add(`rom: ${g.id}`, romAvailable(g), romAvailable(g) ? path.join(cfg.romsDir, g.rom) : `put ${g.rom} into ${cfg.romsDir}/`, false);
 
-  add("relay key", Boolean(cfg.relay.apiKey), cfg.relay.apiKey ? cfg.relay.baseUrl : "RELAY_API_KEY not set (.env.local)");
+  add("relay key", Boolean(cfg.relay.apiKey), cfg.relay.apiKey ? cfg.relay.baseUrl : "RELAY_API_KEY not set (.env.local) — coach commentary and buyer chat are off until it is", false);
   try {
     const rt = await modelRuntime();
     const models = getModels();
     for (const [label, spec] of [["coach model", models.coachModel], ["chat model", models.chatModel]] as const) {
       const { model } = await resolveModel(spec);
-      const auth = await rt.checkAuth(model.provider);
-      const ok = Boolean((auth as { available?: boolean; ok?: boolean }).available ?? (auth as { ok?: boolean }).ok ?? auth);
-      add(label, ok, `${model.provider}/${model.id}${ok ? "" : " — no credentials"}`);
+      // pi answers {type:"api_key", source:"…"} when credentials are configured, an error field otherwise.
+      const auth = (await rt.checkAuth(model.provider).catch(() => undefined)) as { type?: string; source?: string; error?: string; available?: boolean } | boolean | undefined;
+      const ok = typeof auth === "object" && auth !== null ? Boolean(auth.type || auth.available) && !auth.error : Boolean(auth);
+      add(label, ok, `${model.provider}/${model.id}${ok ? ` (${(auth as { source?: string }).source ?? "ok"})` : " — no credentials (RELAY_API_KEY)"}`, false);
     }
   } catch (err) {
-    add("pi models", false, String(err instanceof Error ? err.message : err));
+    add("pi models", false, String(err instanceof Error ? err.message : err), false);
   }
 
-  if (opts.network !== false) {
-    const onRelay = await relayHasModel("jev").catch(() => false);
-    add("jev on relay", onRelay, onRelay ? "the relay lists a Jev model" : `${cfg.relay.baseUrl} has no Jev model — Jev is TypeSafe's own API (TYPESAFE_API_KEY)`, false);
-  }
+  const jevWhere = cfg.typesafe.viaRelay ? `via relay ${cfg.typesafe.baseUrl}/v1/systemone` : `direct ${cfg.typesafe.baseUrl}`;
   if (jevEnabled()) {
     const p = opts.network === false ? { ok: true, model: "(not probed)" } : await jevPing();
-    add("jev (TypeSafe)", p.ok, p.ok ? `${cfg.typesafe.model} → ${p.model}` : `TYPESAFE_API_KEY rejected: ${p.error?.slice(0, 160)}`, false);
+    add("jev (System One)", p.ok, p.ok ? `${cfg.typesafe.model} → ${p.model} (${jevWhere})` : `${jevWhere} rejected: ${p.error?.slice(0, 160)}`, false);
   } else {
-    add("jev (TypeSafe)", false, "TYPESAFE_API_KEY not set — the buddy plays on reflex + coach only (get a key at https://typesafe.ai)", false);
+    add("jev (System One)", false, "no key — set RELAY_API_KEY (OpenRouter serves Jev) or TYPESAFE_API_KEY; the buddy plays on reflex + coach only", false);
   }
 
   if (opts.termix !== false && opts.network !== false) {

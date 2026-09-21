@@ -10,8 +10,9 @@ const log = logger("jev");
  * game state it picks one action from a fixed set and answers a few yes/no questions, each with a
  * probability. No text generation, so a round trip is short enough to run several times a second.
  *
- * Jev is NOT a chat model and is not served by the relay; it needs TYPESAFE_API_KEY. Without the
- * key the buddy still plays on the reflex policy + coach, and the ops stream says so.
+ * Jev is not a chat model: it is reached through TypeSafe's System One API, which OpenRouter mirrors
+ * at <relay>/v1/systemone on the same key (bare ids like `jev-latest` map to `~typesafe/jev-latest`).
+ * Without any key the buddy still plays on the reflex policy + coach, and the ops stream says so.
  */
 
 export const JEV_ACTIONS = {

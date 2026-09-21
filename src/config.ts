@@ -16,6 +16,7 @@ export function loadDotEnv(file = path.join(ROOT, ".env")): void {
     const key = line.slice(0, eq).trim();
     let value = line.slice(eq + 1).trim();
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) value = value.slice(1, -1);
+    if (value === "") continue; // a blank placeholder must not shadow a value in a later file
     if (process.env[key] === undefined) process.env[key] = value;
   }
 }
@@ -41,10 +42,14 @@ export interface Config {
   agentDir: string;
   /** pi model specs (`provider/model[:thinking]`). coach = in-game strategist + commentator, chat = buyer conversations. */
   llm: { coachModel: string; chatModel: string; thinking: string };
-  /** OpenAI-compatible relay (New API style): RELAY_BASE_URL + RELAY_API_KEY. Same relay as 3dcardagent. */
+  /** OpenAI-compatible relay: RELAY_BASE_URL + RELAY_API_KEY. Default OpenRouter (https://openrouter.ai/api). */
   relay: { baseUrl: string; apiKey: string };
-  /** TypeSafe (Jev): the System One model that makes the per-tick typed decisions. */
-  typesafe: { apiKey: string; model: string; baseUrl: string };
+  /**
+   * TypeSafe Jev, the System One model that makes the per-tick typed decisions. OpenRouter serves it
+   * on the same key at <relay>/v1/systemone, so both default to the relay; TYPESAFE_API_KEY /
+   * TYPESAFE_BASE_URL override them for a direct TypeSafe account.
+   */
+  typesafe: { apiKey: string; model: string; baseUrl: string; viaRelay: boolean };
   ai: {
     /** How often the browser reports game state (Hz). */
     observeHz: number;
@@ -77,6 +82,7 @@ export function getConfig(): Config {
   const dataDir = path.resolve(ROOT, env("DATA_DIR", "./data"));
   const skillsDir = path.join(ROOT, "skills");
   const port = envNum("HTTP_PORT", 8790);
+  const relayBaseUrl = env("RELAY_BASE_URL", "https://openrouter.ai/api").replace(/\/+$/, "").replace(/\/v1$/, "");
   cached = {
     root: ROOT,
     dataDir,
@@ -88,18 +94,19 @@ export function getConfig(): Config {
     webDir: path.join(ROOT, "web"),
     agentDir: path.resolve(ROOT, env("PI_CODING_AGENT_DIR", path.join(dataDir, "pi-agent"))),
     llm: {
-      coachModel: env("PI_MODEL", "relay/gemini-2.5-flash-lite"),
-      chatModel: env("PI_CHAT_MODEL", env("PI_MODEL", "relay/gemini-2.5-flash-lite")),
+      coachModel: env("PI_MODEL", "relay/google/gemini-2.5-flash-lite"),
+      chatModel: env("PI_CHAT_MODEL", env("PI_MODEL", "relay/google/gemini-2.5-flash-lite")),
       thinking: env("PI_THINKING", "off"),
     },
     relay: {
-      baseUrl: env("RELAY_BASE_URL", "https://www.cun.ai").replace(/\/+$/, "").replace(/\/v1$/, ""),
+      baseUrl: relayBaseUrl,
       apiKey: env("RELAY_API_KEY"),
     },
     typesafe: {
-      apiKey: env("TYPESAFE_API_KEY"),
+      apiKey: env("TYPESAFE_API_KEY", env("RELAY_API_KEY")),
       model: env("TYPESAFE_MODEL", "jev-latest"),
-      baseUrl: env("TYPESAFE_BASE_URL", "https://api.typesafe.ai").replace(/\/+$/, ""),
+      baseUrl: env("TYPESAFE_BASE_URL", relayBaseUrl).replace(/\/+$/, ""),
+      viaRelay: !env("TYPESAFE_BASE_URL") && !env("TYPESAFE_API_KEY"),
     },
     ai: {
       observeHz: envNum("AI_OBSERVE_HZ", 12),

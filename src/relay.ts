@@ -4,9 +4,10 @@ import { getConfig } from "./config.js";
 import { logger } from "./log.js";
 
 /**
- * OpenAI-compatible relay (New API / one-api style, e.g. https://www.cun.ai) — the same relay
- * 3dcardagent uses. One key serves OpenAI chat completions and Anthropic messages. This module
- * wraps its live model catalog (`GET /v1/models`, cached briefly, degrades to last-known data).
+ * OpenAI-compatible relay. Default: OpenRouter (https://openrouter.ai/api) — one key serves chat
+ * completions for every vendor AND TypeSafe's Jev through the System One endpoint
+ * (`/v1/systemone`). New API / one-api style relays (e.g. https://www.cun.ai) work too. This
+ * module wraps the live model catalog (`GET /v1/models`, cached briefly, degrades to last-known data).
  */
 
 const log = logger("relay");
@@ -17,8 +18,15 @@ export const RELAY_PROVIDER = "relay";
 
 export interface RelayModel {
   id: string;
+  name?: string;
   owned_by?: string;
+  /** New API: which upstream protocols the model can be called with ("openai", "anthropic", …). */
   supported_endpoint_types?: string[] | null;
+  /** OpenRouter */
+  context_length?: number;
+  architecture?: { input_modalities?: string[]; output_modalities?: string[] };
+  pricing?: { prompt?: string; completion?: string };
+  top_provider?: { max_completion_tokens?: number | null };
 }
 
 export interface RelayCatalog {
@@ -53,9 +61,9 @@ function readCache(): RelayCatalog | undefined {
 
 async function fetchCatalog(): Promise<RelayCatalog | undefined> {
   const key = relayKey();
-  if (!key) return undefined;
+  if (!key && !isOpenRouter()) return undefined; // OpenRouter's catalog is public; New API relays need the key
   const res = await fetch(`${relayBaseUrl()}/v1/models`, {
-    headers: { authorization: `Bearer ${key}` },
+    headers: key ? { authorization: `Bearer ${key}` } : {},
     signal: AbortSignal.timeout(20_000),
   });
   if (!res.ok) throw new Error(`GET /v1/models → ${res.status}`);
@@ -83,14 +91,33 @@ export async function relayCatalog(opts: { force?: boolean } = {}): Promise<Rela
   return inflight;
 }
 
-/** Image / embedding / audio models are not chat models. */
+/** Image / embedding / audio / batch / System One entries are not chat models. */
 export function isTextModel(m: RelayModel): boolean {
   const id = m.id.toLowerCase();
+  if (id.endsWith(":batch") || id.includes("typesafe/") || /\bjev\b/.test(id)) return false;
+  if (m.architecture?.output_modalities) return m.architecture.output_modalities.includes("text");
   if (/image|embed|tts|whisper|audio|dall-e|sora|veo|rerank|moderation/.test(id)) return false;
   return true;
 }
 
+export function acceptsImages(m: RelayModel): boolean {
+  return m.architecture?.input_modalities ? m.architecture.input_modalities.includes("image") : true;
+}
+
+/** $/token → $/M token as pi expects; 0 when the relay publishes no prices. */
+export function modelCost(m: RelayModel): { input: number; output: number; cacheRead: number; cacheWrite: number } {
+  const input = Number(m.pricing?.prompt ?? 0) * 1e6;
+  const output = Number(m.pricing?.completion ?? 0) * 1e6;
+  return { input: Number.isFinite(input) ? input : 0, output: Number.isFinite(output) ? output : 0, cacheRead: 0, cacheWrite: 0 };
+}
+
+export function isOpenRouter(): boolean {
+  return /openrouter\.ai/i.test(relayBaseUrl());
+}
+
+/** Models that must be called through the relay's Anthropic Messages endpoint (New API only; OpenRouter speaks OpenAI for all). */
 export function isAnthropicModel(m: RelayModel): boolean {
+  if (isOpenRouter()) return false;
   if (m.supported_endpoint_types?.length) return m.supported_endpoint_types.includes("anthropic") && !m.supported_endpoint_types.includes("openai");
   return /^claude/i.test(m.id);
 }

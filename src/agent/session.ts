@@ -12,7 +12,7 @@ import {
 import { getConfig } from "../config.js";
 import { logger } from "../log.js";
 import { getModels } from "../runtimeConfig.js";
-import { isAnthropicModel, isTextModel, relayBaseUrl, relayCatalog, relayKey, RELAY_PROVIDER, type RelayCatalog } from "../relay.js";
+import { acceptsImages, isAnthropicModel, isTextModel, modelCost, relayBaseUrl, relayCatalog, relayKey, RELAY_PROVIDER, type RelayCatalog } from "../relay.js";
 
 const log = logger("pi");
 
@@ -53,11 +53,11 @@ export function writeRelayModelsJson(catalog: RelayCatalog | undefined): { ids: 
       name: m.id,
       api: anthropic ? "anthropic-messages" : "openai-completions",
       baseUrl: anthropic ? baseUrl : `${baseUrl}/v1`,
-      reasoning: anthropic || /gemini-[3-9]|gpt-5|deepseek-v4|glm-5|grok|kimi-k[3-9]|minimax-m|qwen3/.test(id),
-      input: ["text", "image"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: anthropic ? 200_000 : /gemini/.test(id) ? 1_000_000 : 128_000,
-      maxTokens: anthropic ? 32_000 : 16_384,
+      reasoning: anthropic || /claude|gemini-[3-9]|gpt-5|deepseek-v4|glm-5|grok|kimi-k[3-9]|minimax-m|qwen3/.test(id),
+      input: acceptsImages(m) ? ["text", "image"] : ["text"],
+      cost: modelCost(m),
+      contextWindow: m.context_length ?? (anthropic ? 200_000 : /gemini/.test(id) ? 1_000_000 : 128_000),
+      maxTokens: Math.min(m.top_provider?.max_completion_tokens ?? 16_384, 32_000),
     };
   });
   const wanted = new Set<string>();

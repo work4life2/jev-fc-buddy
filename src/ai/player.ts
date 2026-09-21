@@ -56,7 +56,7 @@ export class BuddyBrain {
     const { ai } = getConfig();
     this.coachTimer = setInterval(() => void this.coachRound(), ai.coachIntervalSeconds * 1000);
     this.send({ type: "status", jev: jevEnabled(), coach: this.coach.model, phase: "boot" });
-    this.op("system", jevEnabled() ? `Jev online (${getConfig().typesafe.model}) · coach ${this.coach.model}` : `Jev offline (no TYPESAFE_API_KEY) · reflex + coach ${this.coach.model}`);
+    this.op("system", jevEnabled() ? `Jev online (${getConfig().typesafe.model}${getConfig().typesafe.viaRelay ? " via relay" : ""}) · coach ${this.coach.model}` : `Jev offline (no relay/TypeSafe key) · reflex + coach ${this.coach.model}`);
   }
 
   private op(src: OpSource, text: string, detail?: Record<string, unknown>) {

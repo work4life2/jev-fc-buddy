@@ -69,3 +69,13 @@ canvas#screen { width: 100%; height: 100%; image-rendering: pixelated; image-ren
 .overlayBox { text-align: center; background: var(--panel); border: 1px solid var(--line); padding: 24px 28px; border-radius: 12px; }
 .overlayBox h2 { margin: 0 0 6px; }
 @media (max-width: 900px) { .play { grid-template-columns: 1fr; height: auto; } .stream { height: 40vh; } }
+
+button.link { background: none; border: none; padding: 0; color: var(--jev); text-decoration: underline; font-size: inherit; }
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: grid; place-items: center; z-index: 20; }
+.modalBox { width: min(460px, 92vw); background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 22px 24px; }
+.modalBox h2 { margin: 0 0 4px; font-size: 17px; }
+.mapRows { display: flex; flex-direction: column; gap: 6px; margin: 12px 0; }
+.mapRow { display: grid; grid-template-columns: 1fr 1fr auto; align-items: center; gap: 10px; padding: 6px 10px; background: #0f1219; border: 1px solid var(--line); border-radius: 8px; }
+.mapName { font-weight: 600; } .mapBind { font-family: ui-monospace, monospace; color: var(--jev); font-size: 12px; }
+.mapSet { padding: 4px 10px; font-size: 12px; }
+.modalActions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }

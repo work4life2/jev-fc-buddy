@@ -3,8 +3,8 @@
 An **AI teammate for classic NES co-op games**, played in the browser and sold as coin codes on the
 [Termix](https://termix.ai) agent marketplace (agent.family).
 
-- Agent harness: [pi](https://pi.dev) (`@earendil-works/pi-coding-agent` SDK) — runs the in-game coach and the buyer chat through the same OpenAI-compatible relay as `3dcardagent`
-- Decision model: [TypeSafe Jev](https://typesafe.ai) (System One) — typed, probability-backed action choices several times a second (`skills/typesafe-ai`)
+- Agent harness: [pi](https://pi.dev) (`@earendil-works/pi-coding-agent` SDK) — runs the in-game coach and the buyer chat through [OpenRouter](https://openrouter.ai) (any OpenAI-compatible relay works)
+- Decision model: [TypeSafe Jev](https://typesafe.ai) (System One) — typed, probability-backed action choices several times a second (`skills/typesafe-ai`). OpenRouter serves Jev on the same key through its System One endpoint (`/api/v1/systemone`, beta)
 - Marketplace: [termix-agent-skills](https://termix.ai/skills?v=1.8.0) v1.8.0 — hosting, orders, delivery, settlement (`skills/termix-agent-skills`, vendored unchanged)
 - Emulator: [jsnes](https://github.com/bfirsh/jsnes) in the player's browser; the server never streams video
 - First game: Contra (魂斗罗). Games are plug-in profiles under `games/<id>/`; nothing outside that folder is title-specific
@@ -32,9 +32,10 @@ human and never hogs the scroll.
 ## Requirements
 
 - Node.js ≥ 22
-- A key for the OpenAI-compatible relay (`RELAY_API_KEY`, default relay `https://www.cun.ai`) — coach + chat
-- A TypeSafe key (`TYPESAFE_API_KEY`) for Jev. **The relay does not serve Jev**; without the key the
-  buddy still plays on reflex + coach and the ops stream says "Jev offline"
+- An OpenRouter key (`RELAY_API_KEY`, relay `https://openrouter.ai/api`) — coach, buyer chat **and Jev**
+  (`jev-latest` → `~typesafe/jev-latest`, $0.042/M input). A direct TypeSafe account can be used
+  instead by setting `TYPESAFE_API_KEY` + `TYPESAFE_BASE_URL=https://api.typesafe.ai`. Without any
+  key the buddy still plays on the reflex policy and the ops stream says "Jev offline"
 - The game ROM(s) in `roms/` (not distributed)
 - Only for selling: a dedicated hot wallet (`WALLET_KEY`) with a little gas on the chosen chain
 
@@ -45,7 +46,7 @@ git clone git@github.com:work4life2/jev-fc-buddy.git && cd jev-fc-buddy
 npm install --ignore-scripts
 npm run build                        # tsc + copies jsnes into web/vendor
 cp .env.example .env
-#   .env.local (git-ignored):  RELAY_API_KEY=sk-...   TYPESAFE_API_KEY=...
+#   .env.local (git-ignored):  RELAY_API_KEY=sk-or-v1-...
 cp /path/to/contra.nes roms/contra.nes
 npm run doctor
 npm run code -- mint 3               # prints FC-XXXX-XXXX-XXXX and the play URL
@@ -65,13 +66,17 @@ Adding `&auto=1` to a play URL spends a coin on page load (testing aid).
 
 ### Controls
 
-| NES | Keyboard | Gamepad (standard mapping) |
+| NES | Keyboard | Gamepad (default = standard mapping) |
 | --- | --- | --- |
-| D-pad | arrows | d-pad / left stick |
-| A (jump) | X or K | bottom / top face button |
-| B (fire) | Z or J | left / right face button, R1 / R2 |
+| D-pad | W A S D (or arrows) | d-pad / left stick |
+| A (jump) | K (or X) | bottom / top face button |
+| B (fire) | J (or Z) | left / right face button, R1 / R2 |
 | Start | Enter | Start |
 | Select | Shift | Select |
+
+Gamepads differ, so the play page has a **🎮 Map** panel (also linked from the coin page): click *Set*
+next to an action and press the button or push the stick you want. The mapping is stored in the
+browser's localStorage per gamepad id and reloaded automatically.
 
 ## Selling on Termix
 
@@ -94,7 +99,7 @@ window elapsed are claimed automatically. Jobs are persisted in `data/jobs/`, co
 ```bash
 npm run model                        # show coach / chat / thinking / jev
 npm run model -- list [filter]       # the relay's live catalog (relay/<id>)
-npm run model -- coach relay/gemini-3-flash
+npm run model -- coach relay/google/gemini-3.1-flash-lite
 npm run model -- reset
 ```
 
