@@ -3,7 +3,7 @@ import { logger } from "../log.js";
 import { createTextSession, parseJsonObject, promptForText, type TextSession } from "../agent/session.js";
 import { getModels } from "../runtimeConfig.js";
 import type { GameProfile } from "../games/registry.js";
-import { JEV_ACTIONS, type JevAction } from "./jev.js";
+import { actionsFor, type JevAction } from "./jev.js";
 import type { Observation } from "./observe.js";
 
 const log = logger("coach");
@@ -23,7 +23,7 @@ export interface CoachAdvice {
 }
 
 export function coachSystemPrompt(game: GameProfile, lang: string): string {
-  const actions = Object.entries(JEV_ACTIONS)
+  const actions = Object.entries(actionsFor(game))
     .map(([k, v]) => `- ${k}: ${v}`)
     .join("\n");
   return `You are the strategist and commentator of an AI teammate ("the buddy", player ${game.players.ai}) playing ${game.title}${game.titleLocal ? ` (${game.titleLocal})` : ""} together with a human (player ${game.players.human}).
@@ -74,7 +74,7 @@ export class Coach {
       const images = shotJpegBase64 && this.supportsVision ? [{ mediaType: "image/jpeg", data: shotJpegBase64 }] : undefined;
       const raw = await promptForText(session, prompt, images);
       const parsed = parseJsonObject<{ intent?: string; plan?: string; say?: string }>(raw) ?? {};
-      const intent = (parsed.intent && parsed.intent in JEV_ACTIONS ? parsed.intent : "auto") as JevAction | "auto";
+      const intent = (parsed.intent && parsed.intent in actionsFor(this.game) ? parsed.intent : "auto") as JevAction | "auto";
       const say = String(parsed.say ?? "").trim().slice(0, 80);
       if (say) this.lastSay = say;
       return { intent, plan: String(parsed.plan ?? "").trim().slice(0, 200), say, model: this.model, latencyMs: Date.now() - started };

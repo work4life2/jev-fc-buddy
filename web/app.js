@@ -1,5 +1,5 @@
 /* Jev FC Buddy — play page. Vanilla JS: jsnes runs the game in the browser; the server runs the AI
-   that holds controller 2. The browser reports RAM at a fixed rate and applies the AI's inputs. */
+   that holds controller 2 (each "act" names its controller: menu taps may go to controller 1). The browser reports RAM at a fixed rate and applies the AI's inputs. */
 (() => {
   const $ = (id) => document.getElementById(id);
   const BTN = { A: 0, B: 1, SELECT: 2, START: 3, UP: 4, DOWN: 5, LEFT: 6, RIGHT: 7 };
@@ -109,6 +109,7 @@
 
   const aiHeld = new Set();
   const aiTurbo = new Set();
+  let aiController = 0; // controller the current act targets (menu taps may use a different one)
   let frameNo = 0;
 
   function onServer(m) {
@@ -123,6 +124,11 @@
         $("hudJev").title = `coach: ${m.coach} · phase: ${m.phase}`;
         break;
       case "act":
+        if (m.controller && m.controller !== aiController) {
+          // switching controllers: let go of everything on the old one first
+          if (aiController && state.nes) for (let b = 0; b < 8; b++) state.nes.buttonUp(aiController, b);
+          aiController = m.controller;
+        }
         aiHeld.clear(); aiTurbo.clear();
         for (const b of m.hold) aiHeld.add(BTN[b]);
         for (const b of m.turbo) aiTurbo.add(BTN[b]);
@@ -250,7 +256,7 @@
   }
 
   function applyAi() {
-    const nes = state.nes, c = state.session.game.players.ai;
+    const nes = state.nes, c = aiController || state.session.game.players.ai;
     for (let b = 0; b < 8; b++) {
       let down = aiHeld.has(b);
       if (aiTurbo.has(b)) down = (frameNo >> 2) & 1; // 7.5 presses per second
@@ -265,7 +271,7 @@
     for (const [a, b] of state.obsRanges) total += b - a;
     const out = new Uint8Array(total);
     let o = 0;
-    for (const [a, b] of state.obsRanges) { out.set(mem.subarray(a, b), o); o += b - a; }
+    for (const [a, b] of state.obsRanges) { out.set(mem.slice(a, b) /* jsnes 1.x: plain Array, 2.x: Uint8Array */, o); o += b - a; }
     let bin = "";
     for (let i = 0; i < out.length; i++) bin += String.fromCharCode(out[i]);
     ws_send({ type: "obs", ram: btoa(bin) });

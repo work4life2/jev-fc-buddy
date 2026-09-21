@@ -7,7 +7,7 @@ An **AI teammate for classic NES co-op games**, played in the browser and sold a
 - Decision model: [TypeSafe Jev](https://typesafe.ai) (System One) — typed, probability-backed action choices several times a second (`skills/typesafe-ai`). OpenRouter serves Jev on the same key through its System One endpoint (`/api/v1/systemone`, beta)
 - Marketplace: [termix-agent-skills](https://termix.ai/skills?v=1.8.0) v1.8.0 — hosting, orders, delivery, settlement (`skills/termix-agent-skills`, vendored unchanged)
 - Emulator: [jsnes](https://github.com/bfirsh/jsnes) in the player's browser; the server never streams video
-- First game: Contra (魂斗罗). Games are plug-in profiles under `games/<id>/`; nothing outside that folder is title-specific
+- Games: Contra (魂斗罗, run-and-gun) and Battle City (坦克大战, top-down tanks). Games are plug-in profiles under `games/<id>/`; nothing outside that folder is title-specific. Each profile names a `genre` that selects the reflex policy: `run-and-gun` (follow / cover / jump / prone) or `tank` (lanes, shells, a base to protect)
 
 ## How it works
 
@@ -25,9 +25,17 @@ player opens /?code=FC-…  ──▶ redeem ──▶ Insert coin (1 coin = one
            every controller change, Jev verdict and coach line is pushed to the right-hand danmaku stream
 ```
 
-The AI holds controller 2, so on the title screen it presses SELECT until the game is in 2-player
-mode and then START. Both players share the screen; the buddy stays within a "follow distance" of the
-human and never hogs the scroll.
+The AI normally holds controller 2, so on the title screen it presses SELECT until the game is in
+2-player mode and then START. Both players share the screen; the buddy stays within a "follow
+distance" of the human and never hogs the scroll.
+
+In Battle City only controller 1 works on the title screen, so there the AI taps SELECT/START on
+controller 1 (`start.controller` in the profile) and then plays as player 2 (the green tank, right of
+the base); the human is player 1 (yellow, left of the base) as usual. The tank policy puts
+survival first: it shoots down shells that are coming at it when it faces them, steps out of their
+lane otherwise, never lingers at point-blank range, refuses to fire along any lane that ends in the
+eagle or its wall (or through the partner), and only then goes hunting — preferring enemies that
+threaten the base and firing positions within reach of it.
 
 ## Requirements
 
@@ -47,7 +55,7 @@ npm install --ignore-scripts
 npm run build                        # tsc + copies jsnes into web/vendor
 cp .env.example .env
 #   .env.local (git-ignored):  RELAY_API_KEY=sk-or-v1-...
-cp /path/to/contra.nes roms/contra.nes
+cp /path/to/contra.nes roms/contra.nes            # and/or roms/battlecity.nes (Battle City (J), 24592 bytes)
 npm run doctor
 npm run code -- mint 3               # prints FC-XXXX-XXXX-XXXX and the play URL
 npm run serve -- --local             # http://localhost:8790/?code=FC-...
@@ -59,7 +67,8 @@ Operator dashboard (codes, live sessions, one-click mint): `http://localhost:879
 Headless end-to-end check (runs jsnes in Node, opens a session, streams RAM, applies the AI's inputs):
 
 ```bash
-node scripts/headless-play.mjs --seconds 60
+node scripts/headless-play.mjs --seconds 60                      # first playable game
+node scripts/headless-play.mjs --seconds 60 --game battlecity    # a specific one (tank games get a wandering dummy human)
 ```
 
 Adding `&auto=1` to a play URL spends a coin on page load (testing aid).
@@ -108,12 +117,18 @@ are). Jev's model id is `TYPESAFE_MODEL` (default `jev-latest`).
 
 ## Adding a game
 
-Create `games/<id>/game.json` (see `games/contra/game.json`): ROM file name, screen size, which
+Create `games/<id>/game.json` (see `games/contra/game.json` for a side-scroller and
+`games/battlecity/game.json` for a top-down tank game): ROM file name, `genre`, screen size, which
 controller is the human's / the AI's, the RAM addresses for player positions, lives, state and the
-enemy table, how phases (title / playing / game over) are recognised, the 2-player start procedure,
-reflex distances, and a short brief for the coach. Drop the ROM into `roms/`. The doctor and the
-play page pick it up on restart. For RAM maps, disassemblies such as
-[nes-contra-us](https://github.com/vermiceli/nes-contra-us) or the Data Crystal wiki are the source.
+enemy table, how phases (title / loading / playing / game over) are recognised, the 2-player start
+procedure (`loadingStart` when a stage screen wants another START), reflex distances, and a short
+brief for the coach. Tank games add a `tank` block: the object table of tanks (with the sprite-id
+ranges that tell moving / standing / spawning / exploding apart), the shell table, the power-up
+bytes, the tile-map shadow with the tile ids per terrain, and the base cells. Drop the ROM into
+`roms/`. The doctor and the play page pick it up on restart. For RAM maps, disassemblies such as
+[nes-contra-us](https://github.com/vermiceli/nes-contra-us) or the Data Crystal wiki are the source;
+when neither has what you need, run the ROM in jsnes under Node and diff RAM while pressing buttons
+(that is how the Battle City map was made).
 
 ## Layout
 
@@ -121,7 +136,8 @@ play page pick it up on restart. For RAM maps, disassemblies such as
 src/index.ts           CLI: serve · code · setup · model · doctor · jobs · pi
 src/server/http.ts     play page, REST (/api/redeem, /api/sessions, /api/games/:id/rom), WebSocket, /admin
 src/ai/observe.ts      RAM bytes → game-agnostic observation (via the game profile)
-src/ai/policy.ts       reflex policy: intent → held buttons
+src/ai/policy.ts       reflex policy (run-and-gun): intent → held buttons
+src/ai/tankPolicy.ts   reflex policy (tank): shells, lanes, path finding, base protection
 src/ai/jev.ts          TypeSafe Jev: typed Choice / Noul questions over the observation
 src/ai/coach.ts        pi session: plan + commentary
 src/ai/player.ts       the brain: reflex ⟷ Jev ⟷ coach, ops stream

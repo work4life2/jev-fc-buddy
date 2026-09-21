@@ -1,0 +1,82 @@
+{
+  "id": "battlecity",
+  "title": "Battle City",
+  "titleLocal": "坦克大战",
+  "system": "nes",
+  "genre": "tank",
+  "rom": "battlecity.nes",
+  "romSha256": "a869aead5b6957fc62002ff9636e048cc34baf0100d629b07dc51aa18f220c0c",
+  "romNote": "Namco 1985 (J), NROM 24592 bytes. The RAM map below was measured with jsnes (data/bc-explore), not copied from a wiki.",
+  "screen": { "width": 256, "height": 240 },
+  "players": { "human": 1, "ai": 2 },
+  "playersNote": "The human is player 1 (yellow tank, spawns left of the base), the AI player 2 (green tank, spawns right). Only controller 1 works on the title screen and the stage curtain, so the AI's SELECT/START taps go to controller 1 (start.controller) while it plays on controller 2. Both tanks are otherwise identical.",
+  "buttons": { "jump": "A", "fire": "B" },
+  "ramRanges": [[0, 256], [1024, 2048]],
+  "ram": {
+    "frame": "0x0b",
+    "gameRoutine": "0x50",
+    "levelRoutine": "0x6a",
+    "playerMode": "0x83",
+    "level": "0x85",
+    "lives": ["0x51", "0x52"],
+    "playerState": ["0xa0", "0xa1"],
+    "playerX": ["0x90", "0x91"],
+    "playerY": ["0x98", "0x99"],
+    "invincible": ["0x89", "0x8a"],
+    "note": "gameRoutine $50: 2 = title screen, 0 otherwise. levelRoutine $6a: ff at boot/title, 3 = stage curtain / score screen, 0-2 = playing (it cycles through the three enemy spawn points). playerMode $83 is the title cursor: 0 = 1 player, 1 = 2 players, 2 = construction. lives $51/$52 are ff on the title. level $85 = stage number (ff on the title). invincible $89/$8a = spawn-shield seconds left."
+  },
+  "phases": {
+    "title": { "gameRoutine": [2] },
+    "loading": { "gameRoutine": [0], "levelRoutine": [3] },
+    "playing": { "gameRoutine": [0], "levelRoutine": [0, 1, 2] }
+  },
+  "playerState": { "falling": 255, "normal": 160, "dead": 0, "frozen": 240 },
+  "start": {
+    "note": "Title: SELECT moves the cursor (playerMode 0/1/2), START begins; then a 'STAGE n' curtain waits for START again (A/B there change the stage, so never press them). After a game over the game returns to the title on its own.",
+    "requirePlayerMode": 1,
+    "controller": 1,
+    "selectButton": "SELECT",
+    "startButton": "START",
+    "loadingStart": true
+  },
+  "tank": {
+    "note": "Object table of 8 tanks: slots 0/1 are the players, 2-7 enemies. x/y are the tank centre (16x16 body, snapped to an 8 px lattice, playfield centres 24..216). sprite: a0-a3 = moving up/left/down/right (low 2 bits = direction), 84-8b = standing (direction not encoded), e0-fd = spawning sparkle (invulnerable), 11-73 = exploding, 00 = not present (x is then ff). flags: 80 = enemy, 40 = frozen by the clock item.",
+    "tanks": { "count": 8, "x": "0x90", "y": "0x98", "sprite": "0xa0", "flags": "0xa8", "playerSlots": [0, 1] },
+    "sprite": { "moving": [160, 163], "standing": [132, 139], "spawning": [224, 253], "exploding": [17, 115] },
+    "bulletsNote": "10 bullet slots, slot i = bullet of tank i (8/9 = the players' second bullets after a star). state: 4d = flying in direction d (0 up, 1 left, 2 down, 3 right), 3x/2x/1x = impact animation, 00 = free. Bullets fly 2 px/frame (4 for power tanks / upgraded players); two bullets that meet destroy each other; a player bullet that hits the partner only stuns them.",
+    "bullets": { "count": 10, "x": "0xb8", "y": "0xc2", "state": "0xcc" },
+    "itemNote": "Power-up on the field: x centre (0 = none), y centre, type (0 helmet, 1 clock, 2 shovel, 3 star, 4 grenade, 5 tank).",
+    "item": { "x": "0x86", "y": "0x87", "type": "0x88" },
+    "mapNote": "Shadow of the PPU name table: 32 bytes per 8 px row, 30 rows, tile ids. Cell (cx, cy) = $0400 + cy*32 + cx covers screen x cx*8..+8, y cy*8..+8. Playfield cells 2..27 on both axes. A bullet is 8 px wide and centred on the lattice, so it straddles two cells; a brick cell takes two hits (0f -> partial -> 00).",
+    "map": {
+      "base": "0x0400",
+      "stride": 32,
+      "cell": 8,
+      "field": { "x0": 16, "y0": 16, "x1": 224, "y1": 224 },
+      "ids": {
+        "empty": ["0x00", "0x20"],
+        "brick": ["0x01-0x0f"],
+        "steel": ["0x10"],
+        "border": ["0x11"],
+        "water": ["0x12"],
+        "trees": ["0x22"],
+        "eagle": ["0xc8-0xcb"],
+        "eagleDestroyed": ["0xcc-0xcf"]
+      }
+    },
+    "eagle": { "x": 120, "y": 216, "cells": [[14, 26], [15, 26], [14, 27], [15, 27]] },
+    "enemiesLeft": "0x7f",
+    "pause": "0x6d",
+    "speeds": { "player": 0.75, "bullet": 2, "fastBullet": 4 }
+  },
+  "reflex": {
+    "followDistance": 48,
+    "engageDistance": 160,
+    "closeDistance": 24,
+    "aimUpHeight": 0,
+    "dodgeDistance": 96,
+    "itemDistance": 160,
+    "turboFire": true
+  },
+  "coachBrief": "Battle City (NES, 1985, Namco) is a top-down tank game on a 13x13-tile arena. Each stage sends 20 enemy tanks from the three spawn points along the top edge; they are all destroyed to clear the stage. The players' base is the eagle at the bottom centre, walled with bricks: if an enemy shell hits the eagle the game is over for both players, whatever their lives. Tanks move up/down/left/right, one shell in flight at a time (two after a star). Shells destroy brick walls (two hits per brick cell), bounce off steel, pass over water and trees. Two shells that meet destroy each other, so a tank can shoot down an incoming shell. Enemy types: basic (slow), fast, power (fast shells), armour (takes four hits). Every fourth, eleventh and eighteenth enemy flashes red: killing it drops a power-up: helmet (shield), clock (freezes enemies), shovel (steel walls around the eagle for a while), star (upgrades the tank: faster shells, then two shells, then shells that break steel), grenade (destroys every enemy on screen), tank (extra life). A player's own shell only stuns the partner, but do not do it. Priorities for the buddy: stay alive (dodge or shoot down incoming shells), protect the eagle, then destroy enemies; do not shoot toward the eagle or its brick wall; collect power-ups when it is safe. The human is player 1 (yellow tank, left of the base); the buddy is player 2 (green tank, right of the base)."
+}

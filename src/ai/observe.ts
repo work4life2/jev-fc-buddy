@@ -1,4 +1,4 @@
-import type { EnemyCategory, GameProfile } from "../games/registry.js";
+import { genreOf, type EnemyCategory, type GameProfile, type TankProfile } from "../games/registry.js";
 
 /**
  * Turns the raw RAM bytes the browser reports into a game-agnostic observation, using only the
@@ -36,6 +36,61 @@ export interface EnemyObs {
   vy: number;
 }
 
+/** Direction index as top-down games count it: 0 up, 1 left, 2 down, 3 right. */
+export type Dir = 0 | 1 | 2 | 3;
+export const DIR_DX: Record<Dir, number> = { 0: 0, 1: -1, 2: 0, 3: 1 };
+export const DIR_DY: Record<Dir, number> = { 0: -1, 1: 0, 2: 1, 3: 0 };
+
+export interface TankObs {
+  slot: number;
+  x: number;
+  y: number;
+  /** Facing while moving; -1 when standing still (the sprite does not tell). */
+  dir: Dir | -1;
+  player: boolean;
+  alive: boolean;
+  spawning: boolean;
+  exploding: boolean;
+  frozen: boolean;
+  /** Velocity per tick (px), from the previous observation of the same slot. */
+  vx: number;
+  vy: number;
+}
+
+export interface ShellObs {
+  /** Owner tank slot (players 0/1 and their second shells 8/9). */
+  slot: number;
+  x: number;
+  y: number;
+  dir: Dir;
+  enemy: boolean;
+  /** Pixels per frame, measured between observations (profile default until seen twice). */
+  speed: number;
+}
+
+export type Terrain = "empty" | "brick" | "steel" | "border" | "water" | "trees" | "ice" | "eagle" | "eagleDestroyed";
+
+/** The arena of a top-down tank game. Coordinates are tank centres on an 8 px lattice. */
+export interface TankWorld {
+  tanks: TankObs[];
+  shells: ShellObs[];
+  item?: { x: number; y: number; type: number };
+  /** Tile id per cell; cell(cx, cy) at cy*stride + cx. */
+  cells: Uint8Array;
+  stride: number;
+  cell: number;
+  field: { x0: number; y0: number; x1: number; y1: number };
+  terrainOf: (id: number) => Terrain;
+  eagle: { x: number; y: number; alive: boolean; cells: Array<[number, number]> };
+  enemiesLeft: number;
+  paused: boolean;
+  /** Spawn-shield seconds left per player index. */
+  shield: [number, number];
+  speeds: { player: number; bullet: number; fastBullet: number };
+  /** Emulator frames between this observation and the previous one (from the game's frame counter). */
+  framesPerTick: number;
+}
+
 export interface Observation {
   game: string;
   frame: number;
@@ -49,6 +104,8 @@ export interface Observation {
   screen: { width: number; height: number };
   /** Horizontal level position of the left screen edge (0 when the profile has no scroll fields). */
   levelScrollX: number;
+  /** Present for genre "tank". */
+  tank?: TankWorld;
   at: number;
 }
 
@@ -117,9 +174,120 @@ function categoryOf(game: GameProfile, level: number, type: number): EnemyCatego
   return t.levelTypes?.[String(level)]?.[key] ?? t.shared[key] ?? t.default ?? "hostile";
 }
 
+function parseIdSet(specs: string[] | undefined): Set<number> {
+  const out = new Set<number>();
+  for (const s of specs ?? []) {
+    const m = /^(0x[0-9a-f]+|\d+)\s*-\s*(0x[0-9a-f]+|\d+)$/i.exec(s.trim());
+    if (m) for (let v = parseAddr(m[1]); v <= parseAddr(m[2]); v++) out.add(v);
+    else out.add(parseAddr(s.trim()));
+  }
+  return out;
+}
+
+const terrainCache = new WeakMap<TankProfile, (id: number) => Terrain>();
+
+function terrainFn(t: TankProfile): (id: number) => Terrain {
+  let fn = terrainCache.get(t);
+  if (fn) return fn;
+  const table: Array<[Terrain, Set<number>]> = (Object.keys(t.map.ids) as Terrain[]).map((k) => [k, parseIdSet(t.map.ids[k])]);
+  const lut = new Array<Terrain>(256).fill("empty");
+  for (let id = 0; id < 256; id++) {
+    const hit = table.find(([, set]) => set.has(id));
+    // Unknown ids are treated as solid: safer for both driving and shooting.
+    lut[id] = hit ? hit[0] : "steel";
+  }
+  fn = (id) => lut[id & 0xff];
+  terrainCache.set(t, fn);
+  return fn;
+}
+
+function tankDir(t: TankProfile, sprite: number): Dir | -1 {
+  return sprite >= t.sprite.moving[0] && sprite <= t.sprite.moving[1] ? ((sprite & 3) as Dir) : -1;
+}
+
+/** Player liveness for the tank genre: a tank sprite (moving or standing) with a real position. */
+function tankAlive(t: TankProfile, sprite: number, x: number): boolean {
+  if (x === 0xff) return false;
+  return (sprite >= t.sprite.moving[0] && sprite <= t.sprite.moving[1]) || (sprite >= t.sprite.standing[0] && sprite <= t.sprite.standing[1]);
+}
+
+function observeTank(game: GameProfile, t: TankProfile, ram: RamView, prev: TankWorld | undefined, framesPerTick: number): TankWorld {
+  const tx = parseAddr(t.tanks.x);
+  const ty = parseAddr(t.tanks.y);
+  const ts = parseAddr(t.tanks.sprite);
+  const tf = t.tanks.flags ? parseAddr(t.tanks.flags) : -1;
+  const tanks: TankObs[] = [];
+  for (let i = 0; i < t.tanks.count; i++) {
+    const x = ram.byte(tx + i);
+    const y = ram.byte(ty + i);
+    const sprite = ram.byte(ts + i);
+    if (x === 0xff || sprite === 0) continue;
+    const flags = tf >= 0 ? ram.byte(tf + i) : 0;
+    const was = prev?.tanks.find((p) => p.slot === i);
+    const spawning = sprite >= t.sprite.spawning[0] && sprite <= t.sprite.spawning[1];
+    const exploding = sprite >= t.sprite.exploding[0] && sprite <= t.sprite.exploding[1];
+    tanks.push({
+      slot: i,
+      x,
+      y,
+      dir: tankDir(t, sprite),
+      player: t.tanks.playerSlots.includes(i),
+      alive: tankAlive(t, sprite, x),
+      spawning,
+      exploding,
+      frozen: (flags & 0x40) !== 0 && !t.tanks.playerSlots.includes(i),
+      vx: was ? x - was.x : 0,
+      vy: was ? y - was.y : 0,
+    });
+  }
+  const bx = parseAddr(t.bullets.x);
+  const by = parseAddr(t.bullets.y);
+  const bs = parseAddr(t.bullets.state);
+  const shells: ShellObs[] = [];
+  const defaultSpeed = t.speeds?.bullet ?? 2;
+  for (let i = 0; i < t.bullets.count; i++) {
+    const state = ram.byte(bs + i);
+    if ((state & 0xf0) !== 0x40) continue;
+    const owner = i >= t.tanks.count ? i - t.tanks.count : i; // second player shells map back to the player
+    const dir = (state & 3) as Dir;
+    const x = ram.byte(bx + i);
+    const y = ram.byte(by + i);
+    const was = prev?.shells.find((s) => s.slot === i && s.dir === dir);
+    const moved = was ? Math.abs(x - was.x) + Math.abs(y - was.y) : 0;
+    // Only a plausible straight-line delta counts (1..8 px per frame); otherwise keep what we knew.
+    const perFrame = moved / Math.max(1, framesPerTick);
+    const speed = was && perFrame >= 1 && perFrame <= 8 ? perFrame : (was?.speed ?? defaultSpeed);
+    shells.push({ slot: i, x, y, dir, enemy: !t.tanks.playerSlots.includes(owner), speed });
+  }
+  const cells = new Uint8Array(t.map.stride * 30);
+  const base = parseAddr(t.map.base);
+  for (let i = 0; i < cells.length; i++) cells[i] = ram.byte(base + i);
+  const terrainOf = terrainFn(t);
+  const eagleAlive = t.eagle.cells.every(([cx, cy]) => terrainOf(cells[cy * t.map.stride + cx]) === "eagle");
+  const item = t.item ? { x: ram.byte(parseAddr(t.item.x)), y: ram.byte(parseAddr(t.item.y)), type: ram.byte(parseAddr(t.item.type)) } : undefined;
+  const inv = game.ram.invincible;
+  return {
+    tanks,
+    shells,
+    item: item && item.x !== 0 && item.x !== 0xff ? item : undefined,
+    cells,
+    stride: t.map.stride,
+    cell: t.map.cell,
+    field: t.map.field,
+    terrainOf,
+    eagle: { x: t.eagle.x, y: t.eagle.y, alive: eagleAlive, cells: t.eagle.cells },
+    enemiesLeft: t.enemiesLeft ? ram.byte(parseAddr(t.enemiesLeft)) : 0,
+    paused: t.pause ? ram.byte(parseAddr(t.pause)) === 1 : false,
+    shield: [inv ? ram.byte(parseAddr(inv[0])) : 0, inv ? ram.byte(parseAddr(inv[1])) : 0],
+    speeds: { player: t.speeds?.player ?? 0.75, bullet: t.speeds?.bullet ?? 2, fastBullet: t.speeds?.fastBullet ?? 4 },
+    framesPerTick,
+  };
+}
+
 export function observe(game: GameProfile, bytes: Uint8Array, prev?: Observation): Observation {
   const ram = new RamView(bytes, game.ramRanges);
   const phase = phaseOf(game, ram);
+  if (genreOf(game) === "tank" && game.tank) return observeTankGame(game, game.tank, ram, phase, prev);
   const aiIdx = (game.players.ai - 1) as 0 | 1;
   const humanIdx = (game.players.human - 1) as 0 | 1;
   const level = game.ram.level ? ram.byte(parseAddr(game.ram.level)) : 0;
@@ -159,6 +327,64 @@ export function observe(game: GameProfile, bytes: Uint8Array, prev?: Observation
     enemies,
     screen: game.screen,
     levelScrollX,
+    at: Date.now(),
+  };
+}
+
+/**
+ * Tank genre: the same Observation shape (so deaths, the coach snapshot and the ops stream work
+ * unchanged) plus `tank`, the arena. `enemies` lists enemy tanks as hostiles, enemy shells as
+ * projectiles and the power-up as an item, all in screen coordinates.
+ */
+function observeTankGame(game: GameProfile, t: TankProfile, ram: RamView, phase: string, prev?: Observation): Observation {
+  const aiIdx = (game.players.ai - 1) as 0 | 1;
+  const humanIdx = (game.players.human - 1) as 0 | 1;
+  const frame = game.ram.frame ? ram.byte(parseAddr(game.ram.frame)) : 0;
+  const framesPerTick = prev ? Math.min(15, Math.max(1, (frame - prev.frame + 256) % 256)) : 3;
+  const world = observeTank(game, t, ram, prev?.tank, framesPerTick);
+  const player = (idx: 0 | 1): PlayerObs => {
+    const slot = t.tanks.playerSlots[idx];
+    const tank = world.tanks.find((k) => k.slot === slot);
+    const lives = ram.byte(parseAddr(game.ram.lives[idx]));
+    return {
+      x: tank?.x ?? 0,
+      y: tank?.y ?? 0,
+      state: tank ? ram.byte(parseAddr(t.tanks.sprite) + slot) : 0,
+      alive: phase === "playing" && !!tank?.alive && !world.paused,
+      lives: lives === 0xff ? 0 : lives,
+      gameOver: !world.eagle.alive,
+      xVel: tank ? Math.sign(tank.vx) : 0,
+      onGround: true,
+      invincible: world.shield[idx] > 0,
+      weapon: 0,
+      levelX: tank?.x ?? 0,
+    };
+  };
+  const ai = player(aiIdx);
+  const enemies: EnemyObs[] = [];
+  for (const k of world.tanks) {
+    if (k.player || !k.alive) continue;
+    enemies.push({ slot: k.slot, x: k.x, y: k.y, type: k.spawning ? 0xe0 : 0x80, hp: 1, category: "hostile", vx: k.vx, vy: k.vy });
+  }
+  for (const s of world.shells) {
+    if (!s.enemy) continue;
+    const was = prev?.enemies.find((p) => p.slot === 16 + s.slot && p.category === "projectile");
+    enemies.push({ slot: 16 + s.slot, x: s.x, y: s.y, type: 0x40 | s.dir, hp: 0, category: "projectile", vx: was ? s.x - was.x : DIR_DX[s.dir] * 5, vy: was ? s.y - was.y : DIR_DY[s.dir] * 5 });
+  }
+  if (world.item) enemies.push({ slot: 32, x: world.item.x, y: world.item.y, type: world.item.type, hp: 0, category: "item", vx: 0, vy: 0 });
+  return {
+    game: game.id,
+    frame,
+    phase,
+    playerMode: game.ram.playerMode ? ram.byte(parseAddr(game.ram.playerMode)) : 1,
+    level: game.ram.level ? ram.byte(parseAddr(game.ram.level)) : 0,
+    levelDirection: "right",
+    ai,
+    human: player(humanIdx),
+    enemies,
+    screen: game.screen,
+    levelScrollX: 0,
+    tank: world,
     at: Date.now(),
   };
 }

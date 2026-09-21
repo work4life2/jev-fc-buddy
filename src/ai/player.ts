@@ -1,10 +1,11 @@
 import { getConfig } from "../config.js";
 import { logger } from "../log.js";
-import type { GameProfile } from "../games/registry.js";
+import { genreOf, type GameProfile } from "../games/registry.js";
 import { Coach } from "./coach.js";
 import { jevDecide, jevEnabled, type JevAction, type JevDecision } from "./jev.js";
 import { observe, type Observation } from "./observe.js";
 import { actionFor, gapAhead, heuristicIntent, IDLE, newMemory, respawnSteer, sameAction, survivalIntent, type Action, type Button, type Intent, type PolicyMemory } from "./policy.js";
+import { newTankMemory, TANK_INTENTS, tankDecide, type TankIntent, type TankMemory } from "./tankPolicy.js";
 
 const log = logger("buddy");
 
@@ -34,6 +35,8 @@ export class BuddyBrain {
   private readonly send: (m: BuddyMessage) => void;
   private readonly coach: Coach;
   private mem: PolicyMemory = newMemory();
+  private tankMem: TankMemory = newTankMemory();
+  private readonly tank: boolean;
   private last: Action = IDLE;
   private lastObs: Observation | undefined;
   private jev: { decision: JevDecision; at: number; askedAt: number } | undefined;
@@ -51,6 +54,7 @@ export class BuddyBrain {
 
   constructor(o: BrainOptions) {
     this.game = o.game;
+    this.tank = genreOf(o.game) === "tank";
     this.send = o.send;
     this.coach = new Coach(o.game, o.lang);
     const { ai } = getConfig();
@@ -97,7 +101,9 @@ export class BuddyBrain {
           .slice(0, 3)
           .map((e) => `${e.k}#${e.t.toString(16)}(dx ${e.dx}, dy ${e.dy}, vx ${e.vx})`)
           .join(" ");
-        const cause = `doing ${this.last.tag}${this.last.reason ? ` [${this.last.reason}]` : ""}; nearby: ${near || "nothing"}; ground=${prev.ai.onGround}; at levelX=${prev.ai.levelX} y=${prev.ai.y} (partner levelX=${prev.human.levelX} y=${prev.human.y}) level=${prev.level}`;
+        const cause = this.tank
+          ? `doing ${this.last.tag}${this.last.reason ? ` [${this.last.reason}]` : ""}; nearby: ${near || "nothing"}; at (${prev.ai.x},${prev.ai.y}) facing ${["up", "left", "down", "right"][this.tankMem.facing]} (partner at ${prev.human.x},${prev.human.y}) stage=${prev.level}`
+          : `doing ${this.last.tag}${this.last.reason ? ` [${this.last.reason}]` : ""}; nearby: ${near || "nothing"}; ground=${prev.ai.onGround}; at levelX=${prev.ai.levelX} y=${prev.ai.y} (partner levelX=${prev.human.levelX} y=${prev.human.y}) level=${prev.level}`;
         this.remember(`buddy died — ${cause}`);
         this.op("system", `buddy down (lives ${obs.ai.lives}) — ${cause}`);
         log.info(`death: ${cause}`);
@@ -110,11 +116,27 @@ export class BuddyBrain {
       if (prev.level !== obs.level) this.remember(`level ${obs.level + 1}`);
     }
 
+    if (prev && obs.phase === "playing" && this.tank && prev.human.gameOver === false && obs.human.gameOver) {
+      this.remember("the base was destroyed");
+      this.op("system", "the base is gone — game over");
+    }
+
     switch (obs.phase) {
       case "title":
         this.titleMacro(obs, now);
         return;
+      case "loading":
+        // Some games wait for START once more on a stage-select / curtain screen.
+        if (this.game.start.loadingStart && now >= this.macroCooldownUntil) {
+          this.tap(this.game.start.startButton as Button, "macro", "START (stage screen)");
+          this.macroCooldownUntil = now + 1500;
+        }
+        return;
       case "playing":
+        if (this.tank) {
+          this.playTank(obs, now);
+          return;
+        }
         if (!obs.ai.alive) {
           const steer = respawnSteer(this.game, obs, this.mem);
           if (steer) this.apply({ hold: [steer.dir], turbo: [], tag: `${steer.dir}`, reason: steer.why }, "reflex");
@@ -126,6 +148,53 @@ export class BuddyBrain {
       default:
         this.apply(IDLE, "reflex");
     }
+  }
+
+  /** Tank genre: reflexes decide the buttons; Jev / the coach only choose the intent. */
+  private playTank(obs: Observation, now: number) {
+    const { ai } = getConfig();
+    if (obs.ai.alive && jevEnabled() && this.jevInflight < 2 && now - this.jevLastAt >= 1000 / ai.jevHz) {
+      this.jevInflight++;
+      this.jevLastAt = now;
+      this.stats.jevCalls++;
+      const askedAt = now;
+      void jevDecide(this.game, obs, { coachIntent: this.coachIntent === "auto" ? this.coachPlan || undefined : `${this.coachIntent}: ${this.coachPlan}`, recent: this.recent.slice(-5) })
+        .then((d) => {
+          if (!d || this.stopped) return;
+          if (this.jev && this.jev.askedAt > askedAt) return;
+          const changed = !this.jev || this.jev.decision.action !== d.action;
+          this.jev = { decision: d, at: Date.now(), askedAt };
+          if (changed) {
+            const top = Object.entries(d.probabilities)
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 3)
+              .map(([k, v]) => `${k} ${(v * 100).toFixed(0)}%`)
+              .join(" · ");
+            this.op("jev", `${d.action} (conf ${(d.confidence * 100).toFixed(0)}%, ${d.latencyMs}ms)`, { top, partnerInDanger: d.partnerInDanger, baseInDanger: d.baseInDanger });
+          }
+        })
+        .finally(() => this.jevInflight--);
+    }
+    // Intent: a fresh, reasonably confident Jev answer; else the coach; else the policy's own judgement.
+    let intent: TankIntent | "auto" = "auto";
+    let src: "jev" | "coach" | "reflex" = "reflex";
+    const fresh = this.jev && now - this.jev.at < 1500 ? this.jev.decision : undefined;
+    if (fresh && fresh.baseInDanger > 0.7) {
+      intent = "defend_base";
+      src = "jev";
+    } else if (fresh && fresh.partnerInDanger > 0.75 && obs.human.alive) {
+      intent = "support_partner";
+      src = "jev";
+    } else if (fresh && fresh.action in TANK_INTENTS && (fresh.probabilities[fresh.action] ?? 0) >= 0.3) {
+      intent = fresh.action as TankIntent;
+      src = "jev";
+    } else if (this.coachIntent !== "auto" && this.coachIntent in TANK_INTENTS) {
+      intent = this.coachIntent as TankIntent;
+      src = "coach";
+    }
+    const action = tankDecide(this.game, obs, this.tankMem, now, intent);
+    if (intent !== "auto" && !action.urgent) action.reason = `${action.reason} [${intent}]`;
+    this.apply(action, action.urgent ? "reflex" : src);
   }
 
   /** Title screen: select 2 players, then start. */
@@ -141,10 +210,12 @@ export class BuddyBrain {
     }
   }
 
+  /** Menu taps go to `start.controller` when the game only listens to one controller there (Battle City: controller 1). */
   private tap(button: Button, src: "macro", text: string) {
-    this.send({ type: "act", controller: this.game.players.ai, hold: [button], turbo: [], tag: text, src });
+    const controller = this.game.start.controller ?? this.game.players.ai;
+    this.send({ type: "act", controller, hold: [button], turbo: [], tag: text, src });
     this.op(src, text);
-    setTimeout(() => this.send({ type: "act", controller: this.game.players.ai, hold: [], turbo: [], tag: "release", src }), 120);
+    setTimeout(() => this.send({ type: "act", controller, hold: [], turbo: [], tag: "release", src }), 120);
     this.last = IDLE;
   }
 
@@ -158,7 +229,7 @@ export class BuddyBrain {
       this.jevLastAt = now;
       this.stats.jevCalls++;
       const askedAt = now;
-      void jevDecide(obs, { coachIntent: this.coachIntent === "auto" ? this.coachPlan || undefined : `${this.coachIntent}: ${this.coachPlan}`, recent: this.recent.slice(-5), gap })
+      void jevDecide(this.game, obs, { coachIntent: this.coachIntent === "auto" ? this.coachPlan || undefined : `${this.coachIntent}: ${this.coachPlan}`, recent: this.recent.slice(-5), gap })
         .then((d) => {
           if (!d || this.stopped) return;
           if (this.jev && this.jev.askedAt > askedAt) return; // an answer to a newer state already arrived
@@ -203,10 +274,10 @@ export class BuddyBrain {
       src = "jev";
       why = `partner in danger ${(fresh.partnerInDanger * 100).toFixed(0)}%`;
     } else if (fresh && this.jevPick(fresh)) {
-      intent = this.jevPick(fresh)!;
+      intent = this.jevPick(fresh)! as Intent;
       src = "jev";
-    } else if (this.coachIntent !== "auto") {
-      intent = this.coachIntent;
+    } else if (this.coachIntent !== "auto" && !(this.coachIntent in TANK_INTENTS)) {
+      intent = this.coachIntent as Intent;
       src = "coach";
     } else {
       const h = heuristicIntent(this.game, obs, this.mem, now);

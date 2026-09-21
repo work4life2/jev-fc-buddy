@@ -1,6 +1,7 @@
 // Runs one bot along the level (hold RIGHT, fire, jump every 3 s) and prints where it dies.
 import fs from "node:fs";
-import * as jsnes from "jsnes";
+import { createRequire } from "node:module";
+const jsnes = createRequire(import.meta.url)("jsnes"); // UMD bundle: require() works for both jsnes 1.x and 2.x
 const bytes = fs.readFileSync("roms/contra.nes");
 let bin = ""; for (const b of bytes) bin += String.fromCharCode(b);
 const nes = new jsnes.NES({ onFrame() {}, onAudioSample: null });

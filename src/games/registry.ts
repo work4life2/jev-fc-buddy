@@ -12,11 +12,45 @@ const log = logger("games");
  */
 export type EnemyCategory = "hostile" | "projectile" | "item" | "obstacle" | "hazard" | "ignore";
 
+/**
+ * Which family of reflexes drives the buddy. `run-and-gun` (default) is the side-scroller policy
+ * (follow / cover / jump / prone); `tank` is the top-down arena policy (lanes, shells, a base to
+ * protect) that reads the object tables described in `tank`.
+ */
+export type Genre = "run-and-gun" | "tank";
+
+/** Top-down tank games: object tables and the tile map, all as CPU addresses. */
+export interface TankProfile {
+  note?: string;
+  tanks: { count: number; x: string; y: string; sprite: string; flags?: string; playerSlots: [number, number] };
+  /** Inclusive sprite-id ranges that tell a tank's state apart. Moving sprites encode the direction in the low 2 bits (0 up, 1 left, 2 down, 3 right). */
+  sprite: { moving: [number, number]; standing: [number, number]; spawning: [number, number]; exploding: [number, number] };
+  bulletsNote?: string;
+  /** Slot i belongs to tank i; the state byte is 0x40 | direction while flying, 0 when free. */
+  bullets: { count: number; x: string; y: string; state: string };
+  itemNote?: string;
+  item?: { x: string; y: string; type: string };
+  mapNote?: string;
+  map: {
+    base: string;
+    stride: number;
+    cell: number;
+    field: { x0: number; y0: number; x1: number; y1: number };
+    /** Tile ids (or "0xNN-0xMM" ranges) per terrain kind. */
+    ids: Partial<Record<"empty" | "brick" | "steel" | "border" | "water" | "trees" | "ice" | "eagle" | "eagleDestroyed", string[]>>;
+  };
+  eagle: { x: number; y: number; cells: Array<[number, number]> };
+  enemiesLeft?: string;
+  pause?: string;
+  speeds?: { player?: number; bullet?: number; fastBullet?: number };
+}
+
 export interface GameProfile {
   id: string;
   title: string;
   titleLocal?: string;
   system: "nes";
+  genre?: Genre;
   rom: string;
   romSha256?: string;
   screen: { width: number; height: number };
@@ -62,9 +96,17 @@ export interface GameProfile {
   };
   /** Known pits per level (level-x ranges), e.g. bridges that explode once crossed. */
   terrain?: { gaps?: Record<string, Array<[number, number] | [number, number, number, number] | [number, number, number, number, "pit" | "bridge" | "hop"]>>; note?: string; gapNote?: string };
-  start: { requirePlayerMode?: number; selectButton: string; startButton: string; note?: string };
+  /** `loadingStart`: the game also waits for START on a loading / stage-select screen (phase "loading"). */
+  /** `controller`: controller the AI uses for the title/stage-screen taps when it differs from `players.ai` (Battle City: only controller 1 works there). */
+  start: { requirePlayerMode?: number; selectButton: string; startButton: string; loadingStart?: boolean; controller?: number; note?: string };
   reflex: { followDistance: number; engageDistance: number; closeDistance: number; aimUpHeight: number; dodgeDistance?: number; itemDistance?: number; turboFire: boolean };
+  /** Present for genre "tank". */
+  tank?: TankProfile;
   coachBrief: string;
+}
+
+export function genreOf(g: GameProfile): Genre {
+  return g.genre ?? (g.tank ? "tank" : "run-and-gun");
 }
 
 let cache: Map<string, GameProfile> | undefined;
@@ -114,6 +156,7 @@ export function publicGame(g: GameProfile) {
     title: g.title,
     titleLocal: g.titleLocal,
     system: g.system,
+    genre: genreOf(g),
     screen: g.screen,
     players: g.players,
     buttons: g.buttons,

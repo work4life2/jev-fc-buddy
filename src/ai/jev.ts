@@ -1,8 +1,10 @@
 import { TypeSafeClient, choice, noul, type JsonValue } from "@typesafe-ai/sdk";
 import { getConfig } from "../config.js";
 import { logger } from "../log.js";
+import { genreOf, type GameProfile } from "../games/registry.js";
 import type { Observation } from "./observe.js";
 import type { GapInfo } from "./policy.js";
+import { TANK_INTENTS, tankSummary, type TankIntent } from "./tankPolicy.js";
 
 const log = logger("jev");
 
@@ -27,7 +29,13 @@ export const JEV_ACTIONS = {
   prone_fire: "Lie prone and fire: bullets are flying at head height, or a low enemy is on the same platform.",
 } as const;
 
-export type JevAction = keyof typeof JEV_ACTIONS;
+/** Either action set: the run-and-gun moves or the tank intents (see tankPolicy.ts). */
+export type JevAction = keyof typeof JEV_ACTIONS | TankIntent;
+
+/** The action set Jev and the coach choose from for a game. */
+export function actionsFor(game: GameProfile): Record<string, string> {
+  return genreOf(game) === "tank" ? TANK_INTENTS : JEV_ACTIONS;
+}
 
 export interface JevDecision {
   action: JevAction;
@@ -37,6 +45,8 @@ export interface JevDecision {
   jumpNow: number;
   proneNow: number;
   sprintNow: number;
+  /** Tank genre only. */
+  baseInDanger: number;
   latencyMs: number;
   model: string;
 }
@@ -83,8 +93,66 @@ export function jevState(obs: Observation, extra: { coachIntent?: string; recent
   };
 }
 
-export async function jevDecide(obs: Observation, extra: { coachIntent?: string; recent?: string[]; gap?: GapInfo } = {}): Promise<JevDecision | undefined> {
+/** Tank genre: which intent should drive the buddy for the next second, plus two danger flags. */
+async function jevDecideTank(game: GameProfile, obs: Observation, extra: { coachIntent?: string; recent?: string[] }): Promise<JevDecision | undefined> {
+  const started = Date.now();
+  const state: { [k: string]: JsonValue } = {
+    game: obs.game,
+    ...(tankSummary(obs, game) as { [k: string]: JsonValue }),
+    partner: obs.human.alive ? { alive: true, dx: obs.human.x - obs.ai.x, dy: obs.human.y - obs.ai.y, lives: obs.human.lives } : { alive: false, lives: obs.human.lives },
+    legend: {
+      dx_dy: "pixels from the buddy's tank; dy < 0 is above (toward the enemy spawn points), the base is at the bottom",
+      enemies: "sorted nearest first; a spawning enemy cannot be hit yet; distance_to_base below 96 means it threatens the eagle",
+      enemy_shells: "heading = direction of flight; a shell whose heading points at the buddy on the same row/column is about to hit",
+    },
+    coach_intent: extra.coachIntent ?? "none",
+    recent_events: extra.recent ?? [],
+  };
+  try {
+    const res = await getClient().systemOne({
+      state,
+      questions: {
+        action: choice(
+          {
+            question: "You control `buddy`, the AI teammate in a two-player top-down tank game. Which intent should drive the buddy for the next second?",
+            rules: [
+              "Survival first: the fast reflex layer already dodges and shoots down shells; you pick where the buddy goes.",
+              "The base (eagle) must not be shot: an enemy with distance_to_base below 96 → defend_base.",
+              "An item on the field within ~120px and no enemy shell nearby → collect_item (grenade, tank and helmet are worth a longer trip).",
+              "The partner has an enemy within 48px or is low on lives → support_partner.",
+              "Two or more enemies facing the buddy's lanes → evade; otherwise engage.",
+              "hold_fire only when the buddy sits in a good lane and enemies are coming to it.",
+              "If coach_intent names a plan, prefer actions consistent with it.",
+            ],
+          },
+          TANK_INTENTS as Record<TankIntent, string>,
+        ),
+        partner_in_danger: noul("Is an enemy tank or an enemy shell within 40px of the partner?"),
+        base_in_danger: noul("Is an enemy tank closer than 64px to the base, or an enemy shell flying toward it?"),
+      },
+    });
+    const a = res.answers.action;
+    return {
+      action: a.choice as JevAction,
+      confidence: a.confidence,
+      probabilities: a.probabilities as Record<string, number>,
+      partnerInDanger: res.answers.partner_in_danger.noul,
+      jumpNow: 0,
+      proneNow: 0,
+      sprintNow: 0,
+      baseInDanger: res.answers.base_in_danger.noul,
+      latencyMs: Date.now() - started,
+      model: res.model,
+    };
+  } catch (err) {
+    log.warn(`jev request failed: ${String(err)}`);
+    return undefined;
+  }
+}
+
+export async function jevDecide(game: GameProfile, obs: Observation, extra: { coachIntent?: string; recent?: string[]; gap?: GapInfo } = {}): Promise<JevDecision | undefined> {
   if (!jevEnabled()) return undefined;
+  if (genreOf(game) === "tank" && obs.tank) return jevDecideTank(game, obs, extra);
   const started = Date.now();
   const state = jevState(obs, extra);
   try {
@@ -122,6 +190,7 @@ export async function jevDecide(obs: Observation, extra: { coachIntent?: string;
       jumpNow: res.answers.jump_now.noul,
       proneNow: res.answers.prone_now.noul,
       sprintNow: res.answers.sprint_now.noul,
+      baseInDanger: 0,
       latencyMs: Date.now() - started,
       model: res.model,
     };
