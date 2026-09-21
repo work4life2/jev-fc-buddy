@@ -1,0 +1,4 @@
+{
+  "skills": ["../skills/termix-agent-skills", "../skills/typesafe-ai"],
+  "enableSkillCommands": true
+}

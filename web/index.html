@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jev FC Buddy · AI co-op for classic games</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header class="top">
+  <div class="brand"><span class="dot"></span> JEV FC BUDDY <span class="sub">AI co-op · 1P you · 2P AI</span></div>
+  <div class="hud" id="hud" hidden>
+    <span id="hudGame"></span>
+    <span id="hudTime" title="time left on this coin"></span>
+    <span id="hudCoins" title="coins left on your code"></span>
+    <span id="hudJev" title="Jev = TypeSafe System One model">Jev …</span>
+    <span id="hudPad">⌨️ keyboard</span>
+    <button id="btnMute" class="ghost" title="mute">🔊</button>
+    <button id="btnQuit" class="ghost" title="end session">✕</button>
+  </div>
+</header>
+
+<main id="gate" class="gate">
+  <div class="card">
+    <h1>Insert your coin code</h1>
+    <p class="muted">Bought coins on Termix? Your code arrived with the order. One coin = one play session.</p>
+    <form id="redeemForm">
+      <input id="codeInput" placeholder="FC-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
+      <button id="btnRedeem">Redeem</button>
+    </form>
+    <div id="redeemResult" class="result" hidden></div>
+    <div id="gamePick" hidden>
+      <h2>Pick a game</h2>
+      <div id="games" class="games"></div>
+      <button id="btnStart" class="primary" disabled>Insert coin ▶</button>
+      <p class="muted small">You are player 1: arrows move, <kbd>X</kbd> jump, <kbd>Z</kbd> fire, <kbd>Enter</kbd> start, <kbd>Shift</kbd> select — or plug in any gamepad. The AI takes controller 2 and starts the 2-player game for you.</p>
+    </div>
+    <p id="gateError" class="error" hidden></p>
+  </div>
+</main>
+
+<main id="play" class="play" hidden>
+  <section class="screen">
+    <div class="frame">
+      <canvas id="screen" width="256" height="240"></canvas>
+      <div id="flyLayer" class="fly"></div>
+      <div id="overlay" class="overlay" hidden>
+        <div class="overlayBox">
+          <h2 id="overlayTitle">Time's up</h2>
+          <p id="overlayText"></p>
+          <button id="btnAgain" class="primary">Insert another coin ▶</button>
+          <button id="btnBack" class="ghost">Back</button>
+        </div>
+      </div>
+    </div>
+    <div class="legend"><span class="tag jev">Jev</span> split-second decision · <span class="tag coach">coach</span> strategy &amp; banter · <span class="tag reflex">reflex</span> built-in policy · <span class="tag macro">macro</span> menu inputs</div>
+  </section>
+  <aside class="stream">
+    <div class="streamHead">AI ops stream <span id="streamCount" class="muted"></span></div>
+    <div id="danmaku" class="danmaku"></div>
+  </aside>
+</main>
+
+<script src="/vendor/jsnes.min.js"></script>
+<script src="/app.js"></script>
+</body>
+</html>
