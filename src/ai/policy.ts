@@ -38,6 +38,8 @@ export interface PolicyMemory {
   /** Level-x positions where ground that gives way was seen (bridges). Gaps stay after the object is gone. */
   gaps: number[];
   level: number;
+  /** A positional evasion (leave a shooter, sidestep a fan) is kept for a while so rules do not thrash. */
+  commit?: { intent: Intent; why: string; until: number };
 }
 
 export function newMemory(): PolicyMemory {
@@ -152,8 +154,15 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
     return { intent: "advance_fire", why: `hazard underfoot (dx ${hazard.dx}) → keep moving` };
   }
   // 1a. A shooter directly below us (pill box under a ledge fires straight up): never linger above it.
+  if (mem.commit && now < mem.commit.until) return { intent: mem.commit.intent, why: mem.commit.why };
+  mem.commit = undefined;
   const under = rel.find((e) => e.category === "hostile" && Math.abs(e.dx) < 40 && e.dy > 28 && e.dy < 110);
-  if (under) return { intent: under.dx <= 4 ? "advance_fire" : "retreat", why: `shooter below (dx ${under.dx}, dy ${under.dy}) → move off it` };
+  if (under) {
+    // Go the way that clears it fastest and keep going until well clear (dx ≥ 56).
+    const dir: 1 | -1 = under.dx <= 4 ? 1 : -1;
+    mem.commit = { intent: dir === sign ? "advance_fire" : "retreat", why: `shooter below (dx ${under.dx}, dy ${under.dy}) → move off it`, until: now + 600 };
+    return { intent: mem.commit.intent, why: mem.commit.why };
+  }
   let low: Rel | undefined; // a bullet that will arrive below the waist: jump it
   let body: Rel | undefined; // a bullet at body/head height: lie under it
   let steep: Rel | undefined; // a bullet coming down (or up) almost vertically: sidestep it
@@ -179,10 +188,15 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
     else body ??= { ...e, dy: yAt };
   }
   if (steep && !body) {
-    // A fan of diagonal shots from a turret: run WITH the bullets' horizontal drift (away from the
-    // shooter), never into the rest of the fan. Falls back to "away from the bullet's x".
-    const drift: 1 | -1 = steep.vx !== 0 ? (steep.vx > 0 ? 1 : -1) : steep.dx > 0 ? -1 : 1;
-    return { intent: drift === sign ? "advance_fire" : "retreat", why: `steep shot (dx ${steep.dx}, dy ${steep.dy}, vx ${steep.vx}, vy ${steep.vy}) → run ${drift > 0 ? "right" : "left"}` };
+    const held = mem.commit as PolicyMemory["commit"];
+    if (held && now < held.until) return { intent: held.intent, why: held.why };
+    // A fan of diagonal shots from a turret: run away from the shooter when we know where it is,
+    // else with the bullet's horizontal drift — and keep that direction for a while (no thrashing).
+    const shooter = rel.find((e) => e.category === "hostile" && Math.abs(e.dx - steep!.dx) < 48 && Math.abs(e.dy) > 24);
+    const drift: 1 | -1 = shooter ? (shooter.dx > 0 ? -1 : 1) : steep.vx !== 0 ? (steep.vx > 0 ? 1 : -1) : steep.dx > 0 ? -1 : 1;
+    const c = { intent: (drift === sign ? "advance_fire" : "retreat") as Intent, why: `steep shot (dx ${steep.dx}, dy ${steep.dy}, vy ${steep.vy}) → run ${drift > 0 ? "right" : "left"}`, until: now + 500 };
+    mem.commit = c;
+    return { intent: c.intent, why: c.why };
   }
   if (low || body) {
     if (!ai.onGround) return undefined; // mid-air: nothing to be done
@@ -227,7 +241,10 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
     return e.hp > 1 ? 72 : 0;
   };
   const heavy = rel.find((e) => e.category === "hostile" && keep(e) > 0 && Math.abs(e.dx) < keep(e) && e.dy > -100 && e.dy < 24);
-  if (heavy) return { intent: heavy.dx >= 0 ? "retreat" : "advance_fire", why: `stationary shooter #${heavy.type.toString(16)} at dx ${heavy.dx}, dy ${heavy.dy} → keep ${keep(heavy)}px` };
+  if (heavy) {
+    mem.commit = { intent: heavy.dx >= 0 ? "retreat" : "advance_fire", why: `stationary shooter #${heavy.type.toString(16)} at dx ${heavy.dx}, dy ${heavy.dy} → keep ${keep(heavy)}px`, until: now + 500 };
+    return { intent: mem.commit.intent, why: mem.commit.why };
+  }
   // 3. Sniper / turret above us: straight up when overhead, diagonal when it is ahead and above.
   const above = rel.find((e) => e.category === "hostile" && Math.abs(e.dx) < 24 && e.dy < -20 && e.dy > -90);
   // Very close overhead, or a turret that cannot be one-shot (hp > 1): do not stand under it.
