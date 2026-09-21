@@ -52,7 +52,14 @@ export interface GameProfile {
   phases: Record<string, { gameRoutine?: number[]; levelRoutine?: number[] }>;
   playerState: { falling: number; normal: number; dead: number; frozen: number };
   /** ENEMY_TYPE id → category. Ids above the shared range differ per level. */
-  enemyTypes?: { shared: Record<string, EnemyCategory>; levelTypes?: Record<string, Record<string, EnemyCategory>>; default?: EnemyCategory; note?: string };
+  enemyTypes?: {
+    shared: Record<string, EnemyCategory>;
+    levelTypes?: Record<string, Record<string, EnemyCategory>>;
+    default?: EnemyCategory;
+    note?: string;
+    /** Stationary shooters by type id → minimum horizontal distance to keep. */
+    keepDistance?: Record<string, number | string>;
+  };
   /** Known pits per level (level-x ranges), e.g. bridges that explode once crossed. */
   terrain?: { gaps?: Record<string, Array<[number, number]>>; note?: string };
   start: { requirePlayerMode?: number; selectButton: string; startButton: string; note?: string };

@@ -63,7 +63,8 @@
       "5": { "0x13": "hostile" },
       "6": { "0x18": "ignore" }
     },
-    "default": "hostile"
+    "default": "hostile",
+    "keepDistance": { "note": "stationary shooters: minimum horizontal distance to keep (px)", "0x02": 56, "0x04": 72, "0x07": 72, "0x08": 72, "0x10": 72, "0x13": 64 }
   },
   "terrain": {
     "note": "Level-x ranges (screenNumber*256 + screenScroll + screen x) of ground that gives way once crossed: the exploding bridges. Measured with scripts/scan-hazards.mjs. A lagging player finds only a pit here.",

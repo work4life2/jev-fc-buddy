@@ -151,6 +151,9 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
     if (mem.stillSince && now - mem.stillSince > 250 && ai.onGround && now - mem.lastJumpAt > 700) return { intent: "jump_forward", why: `hazard underfoot (dx ${hazard.dx}) → jump clear` };
     return { intent: "advance_fire", why: `hazard underfoot (dx ${hazard.dx}) → keep moving` };
   }
+  // 1a. A shooter directly below us (pill box under a ledge fires straight up): never linger above it.
+  const under = rel.find((e) => e.category === "hostile" && Math.abs(e.dx) < 40 && e.dy > 28 && e.dy < 110);
+  if (under) return { intent: under.dx <= 4 ? "advance_fire" : "retreat", why: `shooter below (dx ${under.dx}, dy ${under.dy}) → move off it` };
   let low: Rel | undefined; // a bullet that will arrive below the waist: jump it
   let body: Rel | undefined; // a bullet at body/head height: lie under it
   let steep: Rel | undefined; // a bullet coming down (or up) almost vertically: sidestep it
@@ -158,6 +161,11 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
     if (e.category !== "projectile") continue;
     const passing = Math.abs(e.dx) < 28; // already next to us: stay down until it is gone
     if (Math.abs(e.dx) > dodge || (!e.approaching && !passing)) continue;
+    const vertical = e.vx === 0 && rel.some((h) => h.category === "hostile" && Math.abs(h.dx - e.dx) < 12 && h.dy > e.dy + 10);
+    if (vertical) {
+      steep ??= { ...e, vy: -3 };
+      continue;
+    }
     const atBodyNow = Math.abs(e.dx) < 20 && e.dy > -30 && e.dy < 22; // already on us: only prone can help
     if (!atBodyNow && Math.abs(e.vy) >= 2 && Math.abs(e.vy) >= Math.abs(e.vx) && Math.abs(e.dx) < 32 && ((e.vy > 0 && e.dy < 0 && e.dy > -70) || (e.vy < 0 && e.dy > 0 && e.dy < 70))) {
       steep ??= e;
@@ -213,8 +221,13 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
     if (gap.partner === "on" || (gap.partner === "near" && obs.human.xVel === sign)) return { intent: "advance_fire", why: `bridge in ${gap.dxStart.toFixed(0)}px, partner crossing → sprint` };
   }
   // 2c. Something that cannot be one-shot (turret, wall sensor, hp > 1) close by: keep 56+ px away.
-  const heavy = rel.find((e) => e.category === "hostile" && e.hp > 1 && Math.abs(e.dx) < 72 && e.dy > -100 && e.dy < 24);
-  if (heavy) return { intent: heavy.dx >= 0 ? "retreat" : "advance_fire", why: `heavy hostile (hp ${heavy.hp}) at dx ${heavy.dx}, dy ${heavy.dy} → keep distance` };
+  const keep = (e: Rel): number => {
+    const byType = game.enemyTypes?.keepDistance?.[`0x${e.type.toString(16).padStart(2, "0")}`];
+    if (typeof byType === "number") return byType;
+    return e.hp > 1 ? 72 : 0;
+  };
+  const heavy = rel.find((e) => e.category === "hostile" && keep(e) > 0 && Math.abs(e.dx) < keep(e) && e.dy > -100 && e.dy < 24);
+  if (heavy) return { intent: heavy.dx >= 0 ? "retreat" : "advance_fire", why: `stationary shooter #${heavy.type.toString(16)} at dx ${heavy.dx}, dy ${heavy.dy} → keep ${keep(heavy)}px` };
   // 3. Sniper / turret above us: straight up when overhead, diagonal when it is ahead and above.
   const above = rel.find((e) => e.category === "hostile" && Math.abs(e.dx) < 24 && e.dy < -20 && e.dy > -90);
   // Very close overhead, or a turret that cannot be one-shot (hp > 1): do not stand under it.
