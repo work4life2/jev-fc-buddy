@@ -158,8 +158,9 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
   mem.commit = undefined;
   const under = rel.find((e) => e.category === "hostile" && Math.abs(e.dx) < 40 && e.dy > 28 && e.dy < 110);
   if (under) {
-    // Go the way that clears it fastest and keep going until well clear (dx ≥ 56).
-    const dir: 1 | -1 = under.dx <= 4 ? 1 : -1;
+    // Leave toward the partner's side (forward by default); backing off only when it is clearly ahead.
+    const partnerSide: 1 | -1 = obs.human.alive ? ((obs.human.x - ai.x) * sign >= 0 ? 1 : -1) : 1;
+    const dir: 1 | -1 = under.dx > 24 && partnerSide < 0 ? -1 : under.dx > 24 && ai.x * sign > 48 ? -1 : 1;
     mem.commit = { intent: dir === sign ? "advance_fire" : "retreat", why: `shooter below (dx ${under.dx}, dy ${under.dy}) → move off it`, until: now + 600 };
     return { intent: mem.commit.intent, why: mem.commit.why };
   }
@@ -280,7 +281,7 @@ export function heuristicIntent(game: GameProfile, obs: Observation, mem: Policy
   if (obs.human.alive) {
     const dxP = (obs.human.x - ai.x) * sign;
     const dyP = obs.human.y - ai.y;
-    if (obs.levelDirection === "up" && dyP < -40 && ai.onGround && now - mem.lastJumpAt > 700) return { intent: "jump_forward", why: "partner is above, climb" };
+    if (dyP < -40 && Math.abs(dxP) < 96 && ai.onGround && now - mem.lastJumpAt > 900) return { intent: "jump_forward", why: `partner is ${-dyP}px above → try to climb` };
     if (dxP < -r.followDistance) return { intent: "hold_fire", why: `ahead of partner by ${-dxP}px, covering` };
     if (dxP > r.followDistance * 2) return { intent: "follow_partner", why: `partner ${dxP}px ahead` };
   }
@@ -291,6 +292,15 @@ export function heuristicIntent(game: GameProfile, obs: Observation, mem: Policy
 
 /** Buttons for an intent. */
 export function actionFor(game: GameProfile, obs: Observation, intent: Intent, mem: PolicyMemory, now: number): Action {
+  // At the trailing screen edge the shared screen cannot scroll: backing off further only jams the
+  // game for both players, so turn a retreat into standing fire / a jump-back into a jump-forward.
+  const edgeSign = obs.levelDirection === "up" && obs.human.alive ? (obs.human.x >= obs.ai.x ? 1 : -1) : 1;
+  const atTrailingEdge = edgeSign > 0 ? obs.ai.x < 28 : obs.ai.x > obs.screen.width - 28;
+  if (atTrailingEdge && intent === "retreat") {
+    const upAhead = relative(obs, edgeSign as 1 | -1).find((e) => e.category === "hostile" && e.dx > 0 && e.dx < 110 && e.dy < -24 && e.dy > -100);
+    intent = upAhead ? "aim_diag_fire" : "hold_fire";
+  }
+  if (atTrailingEdge && intent === "jump_back") intent = "jump_forward";
   const fire = game.buttons.fire as Button;
   const jump = game.buttons.jump as Button;
   const prone = (game.buttons.prone ?? "DOWN") as Button;
