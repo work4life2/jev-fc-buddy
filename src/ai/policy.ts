@@ -233,7 +233,7 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
   if (gap && gap.kind === "hop") {
     // A narrow drop: run at it and jump from the edge; never stop on the edge.
     if (gap.inside && !ai.onGround) return undefined;
-    if (gap.dxStart <= 30 && gap.dxStart > -4 && ai.onGround && now - mem.lastJumpAt > 800) return { intent: "jump_forward", why: `drop ahead (dx ${gap.dxStart.toFixed(0)}, ${gap.width}px) → jump` };
+    if (gap.dxStart <= 30 && gap.dxStart > -4 && ai.onGround && now - mem.lastJumpAt > 300) return { intent: "jump_forward", why: `drop ahead (dx ${gap.dxStart.toFixed(0)}, ${gap.width}px) → jump` };
     if (gap.dxStart <= 60) return { intent: "advance_fire", why: `drop in ${gap.dxStart.toFixed(0)}px → run up to it` };
   } else if (gap && gap.kind === "pit") {
     // Dead end at this height: never walk in; get up to the partner's ledge instead.
@@ -311,6 +311,11 @@ export function actionFor(game: GameProfile, obs: Observation, intent: Intent, m
   // game for both players, so turn a retreat into standing fire / a jump-back into a jump-forward.
   const edgeSign = obs.levelDirection === "up" && obs.human.alive ? (obs.human.x >= obs.ai.x ? 1 : -1) : 1;
   const atTrailingEdge = edgeSign > 0 ? obs.ai.x < 28 : obs.ai.x > obs.screen.width - 28;
+  // Never back off into a drop behind us: stand and fire instead.
+  if (intent === "retreat" || intent === "jump_back") {
+    const behind = gapAhead(game, obs, mem, (edgeSign * -1) as 1 | -1, 44);
+    if (behind && behind.kind !== "bridge" && behind.dxStart < 44) intent = "hold_fire";
+  }
   if (atTrailingEdge && intent === "retreat") {
     const upAhead = relative(obs, edgeSign as 1 | -1).find((e) => e.category === "hostile" && e.dx > 0 && e.dx < 110 && e.dy < -24 && e.dy > -100);
     intent = upAhead ? "aim_diag_fire" : "hold_fire";
