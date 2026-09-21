@@ -61,7 +61,7 @@ export interface GameProfile {
     keepDistance?: Record<string, number | string>;
   };
   /** Known pits per level (level-x ranges), e.g. bridges that explode once crossed. */
-  terrain?: { gaps?: Record<string, Array<[number, number] | [number, number, number, number]>>; note?: string; gapNote?: string };
+  terrain?: { gaps?: Record<string, Array<[number, number] | [number, number, number, number] | [number, number, number, number, "pit" | "bridge"]>>; note?: string; gapNote?: string };
   start: { requirePlayerMode?: number; selectButton: string; startButton: string; note?: string };
   reflex: { followDistance: number; engageDistance: number; closeDistance: number; aimUpHeight: number; dodgeDistance?: number; itemDistance?: number; turboFire: boolean };
   coachBrief: string;

@@ -90,17 +90,19 @@ export interface GapInfo {
   width: number;
   inside: boolean;
   partner: "behind" | "near" | "on" | "beyond" | "none";
+  /** bridge = crossable while it explodes; pit = never passable at this height. */
+  kind: "bridge" | "pit";
 }
 
 /** The nearest known pit ahead (profile terrain + hazards remembered this level), if within `range`. */
 export function gapAhead(game: GameProfile, obs: Observation, mem: PolicyMemory, sign: 1 | -1, range = 200): GapInfo | undefined {
-  const zones: Array<[number, number]> = (game.terrain?.gaps?.[String(obs.level)] ?? [])
-    .filter((z) => z.length < 4 || (obs.ai.y >= z[2]! && obs.ai.y <= z[3]!))
-    .map((z) => [z[0], z[1]] as [number, number]);
-  for (const g of mem.gaps) if (!zones.some(([a, b]) => g >= a - 24 && g <= b + 24)) zones.push([g - 16, g + 16]);
+  const zones: Array<[number, number, GapInfo["kind"]]> = (game.terrain?.gaps?.[String(obs.level)] ?? [])
+    .filter((z) => z.length < 4 || (obs.ai.y >= (z[2] as number) && obs.ai.y <= (z[3] as number)))
+    .map((z) => [z[0], z[1], (z[4] as GapInfo["kind"] | undefined) ?? "bridge"] as [number, number, GapInfo["kind"]]);
+  for (const g of mem.gaps) if (!zones.some(([a, b]) => g >= a - 24 && g <= b + 24)) zones.push([g - 16, g + 16, "bridge"]);
   const me = obs.ai.levelX;
   let best: GapInfo | undefined;
-  for (const [a, b] of zones) {
+  for (const [a, b, kind] of zones) {
     const start = sign > 0 ? a : b;
     const end = sign > 0 ? b : a;
     const dxStart = (start - me) * sign;
@@ -112,7 +114,7 @@ export function gapAhead(game: GameProfile, obs: Observation, mem: PolicyMemory,
       const p = (obs.human.levelX - me) * sign;
       partner = p > dxEnd + 8 ? "beyond" : p >= dxStart - 8 ? "on" : p > dxStart - 72 ? "near" : "behind";
     }
-    const info = { dxStart, dxEnd, width: Math.abs(b - a), inside, partner };
+    const info = { dxStart, dxEnd, width: Math.abs(b - a), inside, partner, kind };
     if (!best || info.dxStart < best.dxStart) best = info;
   }
   return best;
@@ -228,7 +230,13 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
   // 2b. Pits (bridges that explode once crossed). Inside: never stop. Ahead: cross together with the
   //     partner; if the partner is already far beyond, the bridge is gone — do not walk in.
   const gap = gapAhead(game, obs, mem, sign);
-  if (gap) {
+  if (gap && gap.kind === "pit") {
+    // Dead end at this height: never walk in; get up to the partner's ledge instead.
+    if (gap.dxStart < 40) {
+      if (obs.human.alive && obs.human.y < ai.y - 40 && ai.onGround && now - mem.lastJumpAt > 900) return { intent: "jump_forward", why: `pit ahead (dx ${gap.dxStart.toFixed(0)}), partner above → try to climb` };
+      return { intent: "hold_fire", why: `pit ahead (dx ${gap.dxStart.toFixed(0)}) → stop, this route ends here` };
+    }
+  } else if (gap) {
     if (gap.inside) return { intent: "advance_fire", why: `on the bridge (${gap.dxEnd.toFixed(0)}px to go) → keep moving` };
     if (gap.dxStart < 24) {
       if (gap.partner === "beyond" && !rel.some((e) => e.category === "hazard")) return { intent: "hold_fire", why: `pit ahead (${gap.width}px), bridge gone → wait at the edge` };
