@@ -94,7 +94,9 @@ export interface GapInfo {
 
 /** The nearest known pit ahead (profile terrain + hazards remembered this level), if within `range`. */
 export function gapAhead(game: GameProfile, obs: Observation, mem: PolicyMemory, sign: 1 | -1, range = 200): GapInfo | undefined {
-  const zones: Array<[number, number]> = [...(game.terrain?.gaps?.[String(obs.level)] ?? [])];
+  const zones: Array<[number, number]> = (game.terrain?.gaps?.[String(obs.level)] ?? [])
+    .filter((z) => z.length < 4 || (obs.ai.y >= z[2]! && obs.ai.y <= z[3]!))
+    .map((z) => [z[0], z[1]] as [number, number]);
   for (const g of mem.gaps) if (!zones.some(([a, b]) => g >= a - 24 && g <= b + 24)) zones.push([g - 16, g + 16]);
   const me = obs.ai.levelX;
   let best: GapInfo | undefined;
@@ -121,7 +123,7 @@ export function respawnSteer(game: GameProfile, obs: Observation, mem: PolicyMem
   if (obs.ai.state !== game.playerState.falling) return undefined;
   const zones = game.terrain?.gaps?.[String(obs.level)] ?? [];
   const me = obs.ai.levelX;
-  const zone = zones.find(([a, b]) => me >= a - 12 && me <= b + 12);
+  const zone = zones.map((z) => [z[0], z[1]] as [number, number]).find(([a, b]) => me >= a - 12 && me <= b + 12);
   if (zone) {
     // Over a pit: drift to whichever edge is closer to the partner (or simply the nearer edge).
     const target = obs.human.alive ? (obs.human.levelX >= (zone[0] + zone[1]) / 2 ? zone[1] + 20 : zone[0] - 20) : me - zone[0] < zone[1] - me ? zone[0] - 20 : zone[1] + 20;

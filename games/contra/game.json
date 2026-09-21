@@ -68,7 +68,8 @@
   },
   "terrain": {
     "note": "Level-x ranges (screenNumber*256 + screenScroll + screen x) of ground that gives way once crossed: the exploding bridges. Measured with scripts/scan-hazards.mjs. A lagging player finds only a pit here.",
-    "gaps": { "0": [[768, 912], [1056, 1200]] }
+    "gaps": { "0": [[768, 912], [1056, 1200], [1944, 2060, 180, 240]] },
+    "gapNote": "[x1, x2] or [x1, x2, yMin, yMax]; the last one is the drop at the end of the low route before the waterfall ledges — only the upper ledges continue."
   },
   "reflex": {
     "followDistance": 56,
