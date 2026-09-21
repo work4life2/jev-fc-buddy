@@ -53,6 +53,8 @@ export interface GameProfile {
   playerState: { falling: number; normal: number; dead: number; frozen: number };
   /** ENEMY_TYPE id → category. Ids above the shared range differ per level. */
   enemyTypes?: { shared: Record<string, EnemyCategory>; levelTypes?: Record<string, Record<string, EnemyCategory>>; default?: EnemyCategory; note?: string };
+  /** Known pits per level (level-x ranges), e.g. bridges that explode once crossed. */
+  terrain?: { gaps?: Record<string, Array<[number, number]>>; note?: string };
   start: { requirePlayerMode?: number; selectButton: string; startButton: string; note?: string };
   reflex: { followDistance: number; engageDistance: number; closeDistance: number; aimUpHeight: number; dodgeDistance?: number; itemDistance?: number; turboFire: boolean };
   coachBrief: string;

@@ -17,6 +17,8 @@ export interface PlayerObs {
   onGround: boolean;
   invincible: boolean;
   weapon: number;
+  /** Level-x (screen x + scroll), 0 when the profile has no scroll fields. */
+  levelX: number;
 }
 
 export interface EnemyObs {
@@ -88,7 +90,7 @@ function phaseOf(game: GameProfile, ram: RamView): string {
   return "other";
 }
 
-function playerOf(game: GameProfile, ram: RamView, idx: 0 | 1, phase: string): PlayerObs {
+function playerOf(game: GameProfile, ram: RamView, idx: 0 | 1, phase: string, levelScrollX: number): PlayerObs {
   const r = game.ram;
   const state = ram.byte(parseAddr(r.playerState[idx]));
   const gameOver = r.gameOver ? ram.byte(parseAddr(r.gameOver[idx])) !== 0 : false;
@@ -104,6 +106,7 @@ function playerOf(game: GameProfile, ram: RamView, idx: 0 | 1, phase: string): P
     onGround: (jump & 0x0f) === 0,
     invincible: r.invincible ? ram.byte(parseAddr(r.invincible[idx])) !== 0 : false,
     weapon: r.weapon ? ram.byte(parseAddr(r.weapon[idx])) & 0x0f : 0,
+    levelX: levelScrollX + ram.byte(parseAddr(r.playerX[idx])),
   };
 }
 
@@ -120,7 +123,8 @@ export function observe(game: GameProfile, bytes: Uint8Array, prev?: Observation
   const aiIdx = (game.players.ai - 1) as 0 | 1;
   const humanIdx = (game.players.human - 1) as 0 | 1;
   const level = game.ram.level ? ram.byte(parseAddr(game.ram.level)) : 0;
-  const aiNow = playerOf(game, ram, aiIdx, phase);
+  const levelScrollX = game.ram.screenNumber && game.ram.screenScroll ? ram.byte(parseAddr(game.ram.screenNumber)) * 256 + ram.byte(parseAddr(game.ram.screenScroll)) : 0;
+  const aiNow = playerOf(game, ram, aiIdx, phase, levelScrollX);
   const enemies: EnemyObs[] = [];
   const e = game.ram.enemies;
   if (e) {
@@ -143,7 +147,6 @@ export function observe(game: GameProfile, bytes: Uint8Array, prev?: Observation
     }
   }
   const scrollType = game.ram.scrollType ? ram.byte(parseAddr(game.ram.scrollType)) : 0;
-  const levelScrollX = game.ram.screenNumber && game.ram.screenScroll ? ram.byte(parseAddr(game.ram.screenNumber)) * 256 + ram.byte(parseAddr(game.ram.screenScroll)) : 0;
   return {
     game: game.id,
     frame: game.ram.frame ? ram.byte(parseAddr(game.ram.frame)) : 0,
@@ -152,7 +155,7 @@ export function observe(game: GameProfile, bytes: Uint8Array, prev?: Observation
     level,
     levelDirection: scrollType === 1 ? "up" : "right",
     ai: aiNow,
-    human: playerOf(game, ram, humanIdx, phase),
+    human: playerOf(game, ram, humanIdx, phase, levelScrollX),
     enemies,
     screen: game.screen,
     levelScrollX,

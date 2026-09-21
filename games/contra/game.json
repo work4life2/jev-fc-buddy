@@ -65,6 +65,10 @@
     },
     "default": "hostile"
   },
+  "terrain": {
+    "note": "Level-x ranges (screenNumber*256 + screenScroll + screen x) of ground that gives way once crossed: the exploding bridges. Measured with scripts/scan-hazards.mjs. A lagging player finds only a pit here.",
+    "gaps": { "0": [[768, 912], [1056, 1200]] }
+  },
   "reflex": {
     "followDistance": 56,
     "engageDistance": 120,

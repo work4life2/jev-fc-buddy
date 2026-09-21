@@ -4,7 +4,7 @@ import type { GameProfile } from "../games/registry.js";
 import { Coach } from "./coach.js";
 import { jevDecide, jevEnabled, type JevAction, type JevDecision } from "./jev.js";
 import { observe, type Observation } from "./observe.js";
-import { actionFor, heuristicIntent, IDLE, newMemory, sameAction, survivalIntent, type Action, type Button, type Intent, type PolicyMemory } from "./policy.js";
+import { actionFor, gapAhead, heuristicIntent, IDLE, newMemory, respawnSteer, sameAction, survivalIntent, type Action, type Button, type Intent, type PolicyMemory } from "./policy.js";
 
 const log = logger("buddy");
 
@@ -36,8 +36,8 @@ export class BuddyBrain {
   private mem: PolicyMemory = newMemory();
   private last: Action = IDLE;
   private lastObs: Observation | undefined;
-  private jev: { decision: JevDecision; at: number } | undefined;
-  private jevInflight = false;
+  private jev: { decision: JevDecision; at: number; askedAt: number } | undefined;
+  private jevInflight = 0;
   private jevLastAt = 0;
   private coachIntent: JevAction | "auto" = "auto";
   private coachPlan = "";
@@ -97,7 +97,7 @@ export class BuddyBrain {
           .slice(0, 3)
           .map((e) => `${e.k}#${e.t.toString(16)}(dx ${e.dx}, dy ${e.dy}, vx ${e.vx})`)
           .join(" ");
-        const cause = `doing ${this.last.tag}${this.last.reason ? ` [${this.last.reason}]` : ""}; nearby: ${near || "nothing"}; ground=${prev.ai.onGround}`;
+        const cause = `doing ${this.last.tag}${this.last.reason ? ` [${this.last.reason}]` : ""}; nearby: ${near || "nothing"}; ground=${prev.ai.onGround}; at levelX=${prev.ai.levelX} y=${prev.ai.y} (partner levelX=${prev.human.levelX} y=${prev.human.y}) level=${prev.level}`;
         this.remember(`buddy died — ${cause}`);
         this.op("system", `buddy down (lives ${obs.ai.lives}) — ${cause}`);
         log.info(`death: ${cause}`);
@@ -116,7 +116,9 @@ export class BuddyBrain {
         return;
       case "playing":
         if (!obs.ai.alive) {
-          this.apply(IDLE, "reflex");
+          const steer = respawnSteer(this.game, obs, this.mem);
+          if (steer) this.apply({ hold: [steer.dir], turbo: [], tag: `${steer.dir}`, reason: steer.why }, "reflex");
+          else this.apply(IDLE, "reflex");
           return;
         }
         this.play(obs, now);
@@ -148,16 +150,20 @@ export class BuddyBrain {
 
   private play(obs: Observation, now: number) {
     const { ai } = getConfig();
-    // 1. Ask Jev at most jevHz times a second, one request in flight.
-    if (jevEnabled() && !this.jevInflight && now - this.jevLastAt >= 1000 / ai.jevHz) {
-      this.jevInflight = true;
+    // 1. Ask Jev jevHz times a second with up to two requests in flight (answers ~300–700 ms apart).
+    const sign: 1 | -1 = 1;
+    const gap = gapAhead(this.game, obs, this.mem, sign);
+    if (jevEnabled() && this.jevInflight < 2 && now - this.jevLastAt >= 1000 / ai.jevHz) {
+      this.jevInflight++;
       this.jevLastAt = now;
       this.stats.jevCalls++;
-      void jevDecide(obs, { coachIntent: this.coachIntent === "auto" ? this.coachPlan || undefined : `${this.coachIntent}: ${this.coachPlan}`, recent: this.recent.slice(-5) })
+      const askedAt = now;
+      void jevDecide(obs, { coachIntent: this.coachIntent === "auto" ? this.coachPlan || undefined : `${this.coachIntent}: ${this.coachPlan}`, recent: this.recent.slice(-5), gap })
         .then((d) => {
           if (!d || this.stopped) return;
+          if (this.jev && this.jev.askedAt > askedAt) return; // an answer to a newer state already arrived
           const changed = !this.jev || this.jev.decision.action !== d.action;
-          this.jev = { decision: d, at: Date.now() };
+          this.jev = { decision: d, at: Date.now(), askedAt };
           if (changed) {
             const top = Object.entries(d.probabilities)
               .sort((a, b) => b[1] - a[1])
@@ -167,7 +173,7 @@ export class BuddyBrain {
             this.op("jev", `${d.action} (conf ${(d.confidence * 100).toFixed(0)}%, ${d.latencyMs}ms)`, { top, partnerInDanger: d.partnerInDanger, jumpNow: d.jumpNow });
           }
         })
-        .finally(() => (this.jevInflight = false));
+        .finally(() => this.jevInflight--);
     }
 
     // 2. Pick the intent. Survival reflexes always win (a model round trip is too slow for a bullet);
@@ -175,11 +181,15 @@ export class BuddyBrain {
     let intent: Intent;
     let src: "jev" | "coach" | "reflex" = "reflex";
     let why = "";
-    const fresh = this.jev && now - this.jev.at < 1500 ? this.jev.decision : undefined;
+    const fresh = this.jev && now - this.jev.at < 1200 ? this.jev.decision : undefined;
     const urgent = survivalIntent(this.game, obs, this.mem, now);
     if (urgent) {
       intent = urgent.intent;
       why = urgent.why;
+    } else if (fresh && fresh.sprintNow > 0.65) {
+      intent = "advance_fire";
+      src = "jev";
+      why = `sprint_now ${(fresh.sprintNow * 100).toFixed(0)}%`;
     } else if (fresh && fresh.proneNow > 0.7 && obs.ai.onGround) {
       intent = "prone_fire";
       src = "jev";
@@ -231,9 +241,9 @@ export class BuddyBrain {
     const prevP = prev ? (p[prev.action] ?? 0) : 0;
     const bestP = p[d.action] ?? 0;
     let pick: JevAction | undefined;
-    if (prev && Date.now() - prev.since < 2500 && prevP >= 0.2 && bestP - prevP < 0.15) pick = prev.action;
-    else if (bestP >= (twitchy.has(d.action) ? 0.5 : 0.3)) pick = d.action;
-    else if (prev && prevP >= 0.2) pick = prev.action;
+    if (prev && Date.now() - prev.since < 2000 && prevP >= 0.18 && bestP - prevP < 0.1) pick = prev.action;
+    else if (bestP >= (twitchy.has(d.action) ? 0.4 : 0.25)) pick = d.action;
+    else if (prev && prevP >= 0.18) pick = prev.action;
     if (pick && pick !== prev?.action) this.jevSticky = { action: pick, since: Date.now() };
     return pick;
   }

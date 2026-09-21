@@ -2,6 +2,7 @@ import { TypeSafeClient, choice, noul, type JsonValue } from "@typesafe-ai/sdk";
 import { getConfig } from "../config.js";
 import { logger } from "../log.js";
 import type { Observation } from "./observe.js";
+import type { GapInfo } from "./policy.js";
 
 const log = logger("jev");
 
@@ -35,6 +36,7 @@ export interface JevDecision {
   partnerInDanger: number;
   jumpNow: number;
   proneNow: number;
+  sprintNow: number;
   latencyMs: number;
   model: string;
 }
@@ -47,12 +49,12 @@ export function jevEnabled(): boolean {
 
 function getClient(): TypeSafeClient {
   const { typesafe } = getConfig();
-  client ??= new TypeSafeClient({ apiKey: typesafe.apiKey, baseURL: typesafe.baseUrl, defaultModel: typesafe.model, timeout: 4000, retry: { maxRetries: 0 } });
+  client ??= new TypeSafeClient({ apiKey: typesafe.apiKey, baseURL: typesafe.baseUrl, defaultModel: typesafe.model, timeout: 2500, retry: { maxRetries: 0 } });
   return client;
 }
 
 /** Compact state for the model: relative positions, no raw bytes. */
-export function jevState(obs: Observation, extra: { coachIntent?: string; recent?: string[] } = {}): { [k: string]: JsonValue } {
+export function jevState(obs: Observation, extra: { coachIntent?: string; recent?: string[]; gap?: GapInfo } = {}): { [k: string]: JsonValue } {
   const ai = obs.ai;
   const sorted = obs.enemies
     .map((e) => ({ kind: e.category, dx: e.x - ai.x, dy: e.y - ai.y, moving_x: e.vx, moving_y: e.vy, hp: e.hp }))
@@ -66,6 +68,9 @@ export function jevState(obs: Observation, extra: { coachIntent?: string; recent
     partner: obs.human.alive
       ? { alive: true, dx: obs.human.x - ai.x, dy: obs.human.y - ai.y, lives: obs.human.lives, moving: obs.human.xVel }
       : { alive: false, lives: obs.human.lives },
+    pit_ahead: extra.gap
+      ? { starts_in_px: Math.round(extra.gap.dxStart), ends_in_px: Math.round(extra.gap.dxEnd), width_px: extra.gap.width, buddy_on_it: extra.gap.inside, partner_is: extra.gap.partner, note: "a bridge that explodes as it is crossed; a player who arrives after it is gone falls to death; it is too wide to jump" }
+      : "none within 200px",
     objects_relative_to_buddy: enemies,
     legend: {
       kind: "hostile = enemy that can be shot; projectile = enemy bullet/grenade, cannot be shot, must be dodged; item = weapon power-up worth collecting (a flying capsule must be shot first); hazard = bridge that explodes under the buddy, never stand still on or next to it",
@@ -78,7 +83,7 @@ export function jevState(obs: Observation, extra: { coachIntent?: string; recent
   };
 }
 
-export async function jevDecide(obs: Observation, extra: { coachIntent?: string; recent?: string[] } = {}): Promise<JevDecision | undefined> {
+export async function jevDecide(obs: Observation, extra: { coachIntent?: string; recent?: string[]; gap?: GapInfo } = {}): Promise<JevDecision | undefined> {
   if (!jevEnabled()) return undefined;
   const started = Date.now();
   const state = jevState(obs, extra);
@@ -94,6 +99,7 @@ export async function jevDecide(obs: Observation, extra: { coachIntent?: string;
               "A projectile at roughly the buddy's height (dy between -30 and 10) closing in within 60px: prone_fire (jump_forward only if it is low, dy > 5).",
               "A hostile ahead within 100px at the same height: hold_fire until it is gone; do not walk into it.",
               "The partner leads; never run more than ~60px ahead of a living partner. Prefer follow_partner when the partner is far ahead.",
+              "pit_ahead: cross a bridge only together with the partner (advance_fire while the partner is on it or about to step on it); never stop on it; if the partner is already beyond it and it is gone, hold_fire at the edge.",
               "Items are good: a weapon item within reach and no hostile nearby → move toward it (advance_fire if ahead, retreat if behind).",
               "Jump only when something must be cleared or dodged; needless jumps get the buddy killed.",
               "If coach_intent names a plan, prefer actions consistent with it.",
@@ -104,6 +110,7 @@ export async function jevDecide(obs: Observation, extra: { coachIntent?: string;
         partner_in_danger: noul("Is a hostile within 40px of the partner, or is the partner about to be overrun?"),
         jump_now: noul("Is a LOW projectile or a hostile about to touch the buddy so that jumping right now is the only way to survive?"),
         prone_now: noul("Is a projectile at the buddy's body height about to hit it, so that lying prone right now avoids it?"),
+        sprint_now: noul("Should the buddy run forward at full speed right now, e.g. to cross the bridge with the partner or to keep up with a partner who is walking away?"),
       },
     });
     const a = res.answers.action;
@@ -114,6 +121,7 @@ export async function jevDecide(obs: Observation, extra: { coachIntent?: string;
       partnerInDanger: res.answers.partner_in_danger.noul,
       jumpNow: res.answers.jump_now.noul,
       proneNow: res.answers.prone_now.noul,
+      sprintNow: res.answers.sprint_now.noul,
       latencyMs: Date.now() - started,
       model: res.model,
     };

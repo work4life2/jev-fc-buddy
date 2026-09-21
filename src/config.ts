@@ -110,7 +110,7 @@ export function getConfig(): Config {
     },
     ai: {
       observeHz: envNum("AI_OBSERVE_HZ", 24),
-      jevHz: envNum("AI_JEV_HZ", 4),
+      jevHz: envNum("AI_JEV_HZ", 8),
       coachIntervalSeconds: envNum("AI_COACH_INTERVAL_SECONDS", 10),
       coachVision: env("AI_COACH_VISION", "1") !== "0",
     },
