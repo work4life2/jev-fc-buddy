@@ -1,0 +1,11 @@
+[Unit]
+Description=Check origin/main every minute and redeploy Jev FC Buddy on change
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1min
+AccuracySec=10s
+Unit=jev-fc-buddy-autodeploy.service
+
+[Install]
+WantedBy=timers.target

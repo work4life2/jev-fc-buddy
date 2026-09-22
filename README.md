@@ -103,6 +103,18 @@ artifact, submitted on-chain and posted in the order conversation. Buyer chat is
 pi chat session. Orders are re-swept every `SWEEP_INTERVAL_SECONDS`; delivered orders whose challenge
 window elapsed are claimed automatically. Jobs are persisted in `data/jobs/`, codes in `data/coins.json`.
 
+## Deploying (bare-metal, pull-based)
+
+`deploy/` mirrors 3dcardagent's setup: a systemd service, a one-minute timer that redeploys when
+origin/main moves, and an nginx site with Let's Encrypt. On a fresh Ubuntu box with nginx:
+
+```
+scp .env.local roms/*.nes root@host:/opt/jev-fc-buddy/      # PUBLIC_BASE_URL=https://<host>, ADMIN_TOKEN=…, HTTP_HOST=127.0.0.1
+ssh root@host 'curl -fsSL https://raw.githubusercontent.com/work4life2/jev-fc-buddy/main/deploy/server-bootstrap.sh | bash'
+```
+
+After that, `git push` is the deploy. See AGENTS.md → Production for the live server.
+
 ## Models
 
 ```bash

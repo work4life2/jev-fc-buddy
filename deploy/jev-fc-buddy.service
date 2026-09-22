@@ -1,0 +1,25 @@
+# systemd unit for a bare-metal install (deploy/deploy.sh installs it, substituting User and paths).
+[Unit]
+Description=Jev FC Buddy — AI co-op NES buddy, play server + Termix seller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/opt/jev-fc-buddy
+EnvironmentFile=-/opt/jev-fc-buddy/.env
+EnvironmentFile=-/opt/jev-fc-buddy/.env.local
+Environment=NODE_ENV=production
+ExecStart=/usr/bin/env node dist/index.js serve
+Restart=always
+RestartSec=5
+# Game ticks are latency-sensitive; the holo-card service on the same box runs Blender renders
+# that saturate both cores for minutes. Give this unit 3x its CPU share when they compete.
+CPUWeight=300
+TimeoutStopSec=30
+KillSignal=SIGTERM
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

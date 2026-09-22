@@ -262,6 +262,20 @@ export function startHttpServer(): http.Server {
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://x");
     if (url.pathname.startsWith("/api/")) {
+      // The play page may be hosted on another origin (Vercel): allow the listed ones.
+      const origin = req.headers.origin ?? "";
+      if (origin && cfg.http.allowedOrigins.includes(origin)) {
+        res.setHeader("access-control-allow-origin", origin);
+        res.setHeader("vary", "Origin");
+        res.setHeader("access-control-allow-methods", "GET, POST, OPTIONS");
+        res.setHeader("access-control-allow-headers", "content-type, authorization");
+        res.setHeader("access-control-max-age", "86400");
+      }
+      if (req.method === "OPTIONS") {
+        res.writeHead(204);
+        res.end();
+        return;
+      }
       handleApi(req, res, url).catch((err) => {
         log.error(`api ${url.pathname}: ${String(err)}`);
         json(res, 500, { error: "internal error" });

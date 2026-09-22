@@ -11,3 +11,4 @@ web/vendor/
 roms/*
 !roms/README.md
 __pycache__/
+pass/

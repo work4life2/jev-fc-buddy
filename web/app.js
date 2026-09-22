@@ -5,12 +5,17 @@
   const BTN = { A: 0, B: 1, SELECT: 2, START: 3, UP: 4, DOWN: 5, LEFT: 6, RIGHT: 7 };
   const state = { code: null, coins: 0, games: [], game: null, session: null, ws: null, nes: null, running: false, muted: false, padIndex: null, lang: navigator.language || "en", obsHz: 12 };
 
+  // Where the API lives. Same origin when the server serves this page; when the page is hosted
+  // elsewhere (Vercel), /config.js sets window.JEV_API_BASE to the server's https URL.
+  const API_BASE = (window.JEV_API_BASE || "").replace(/\/+$/, "");
+  const WS_BASE = API_BASE ? API_BASE.replace(/^http/, "ws") : `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`;
+
   // ───────────────────────── gate ─────────────────────────
   const params = new URLSearchParams(location.search);
   if (params.get("code")) $("codeInput").value = params.get("code");
 
   async function api(path, body) {
-    const res = await fetch(path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : undefined);
+    const res = await fetch(API_BASE + path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : undefined);
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
     return data;
@@ -99,8 +104,7 @@
 
   function connect(s) {
     if (state.ws) { state.ws.onclose = null; state.ws.close(); }
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    const ws = new WebSocket(`${proto}://${location.host}/ws?token=${s.token}`);
+    const ws = new WebSocket(`${WS_BASE}/ws?token=${s.token}`);
     state.ws = ws;
     ws.onopen = () => { ws.send(JSON.stringify({ type: "hello", lang: state.lang })); pushOp("system", "connected", ""); };
     ws.onmessage = (ev) => onServer(JSON.parse(ev.data));
@@ -224,7 +228,7 @@
       sampleRate: audio ? audio.sampleRate : 44100,
     });
     state.nes = nes;
-    const rom = await fetch(`/api/games/${s.game.id}/rom?token=${s.token}`);
+    const rom = await fetch(`${API_BASE}/api/games/${s.game.id}/rom?token=${s.token}`);
     if (!rom.ok) throw new Error("could not load the game");
     const bytes = new Uint8Array(await rom.arrayBuffer());
     let bin = "";

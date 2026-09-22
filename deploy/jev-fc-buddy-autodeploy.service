@@ -1,0 +1,11 @@
+# Redeploys when origin/main moves. Triggered by jev-fc-buddy-autodeploy.timer (every minute).
+[Unit]
+Description=Jev FC Buddy — pull origin/main and redeploy if it changed
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/jev-fc-buddy
+ExecStart=/bin/bash /opt/jev-fc-buddy/deploy/deploy.sh
+TimeoutStartSec=900
