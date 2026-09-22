@@ -282,7 +282,7 @@ export function startHttpServer(): http.Server {
       });
       return;
     }
-    if (url.pathname === "/admin" || url.pathname === "/admin/") {
+    if (url.pathname === cfg.http.adminPath || url.pathname === cfg.http.adminPath + "/") {
       if (!isAdmin(req)) {
         res.writeHead(401, { "content-type": "text/plain" });
         res.end("admin token required (Authorization: Bearer <ADMIN_TOKEN>)");
@@ -320,7 +320,7 @@ export function startHttpServer(): http.Server {
   });
 
   server.listen(cfg.http.port, cfg.http.host, () => {
-    log.info(`play page at ${cfg.http.publicBaseUrl}/  (operator dashboard: /admin)`);
+    log.info(`play page at ${cfg.http.publicBaseUrl}/  (operator dashboard: ${cfg.http.adminPath})`);
   });
   return server;
 }

@@ -19,8 +19,10 @@ coin codes on the Termix agent marketplace.
 The backend runs on the same Linode box as 3dcardagent (`~/code/3dcardagent`, memory file
 `holo-card-deployment`): Ubuntu 24.04, 2 vCPU / 3.8 GB, Singapore, `172.104.55.67`.
 
-- SSH: `ssh -i pass/termix-jack-dev.pem root@172.104.55.67` (`pass/` is git-ignored; also holds
-  `admin-token.txt`, the `ADMIN_TOKEN` for `/admin` and `/api/admin/*`).
+- SSH: `ssh -i pass/termix-jack-dev.pem root@172.104.55.67` (key only; password login is off). `pass/` is git-ignored and holds
+  `admin-token.txt` (`ADMIN_TOKEN`, bearer for the operator page and `/api/admin/*`) and `admin-path.txt`
+  (`ADMIN_PATH`: the operator page lives at that random path, `/admin` is gone). nginx throttles the
+  operator page, `/api/admin/*` and `/api/redeem` to 5 req/s per IP; fail2ban bans repeat 401/429 offenders.
 - Layout: repo at `/opt/jev-fc-buddy`, runs as user `jevbuddy` under systemd `jev-fc-buddy`
   (`journalctl -fu jev-fc-buddy`). `.env.local` there is the only env file (relay key, `HTTP_HOST=127.0.0.1`,
   `PUBLIC_BASE_URL`, `ADMIN_TOKEN`, `ALLOWED_ORIGINS`). ROMs are in `/opt/jev-fc-buddy/roms` (git-ignored, copied by scp).

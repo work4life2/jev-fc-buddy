@@ -68,7 +68,7 @@ export interface Config {
     codePrefix: string;
   };
   termix: { chain: string; agentId: string; hasWalletKey: boolean; rpcUrl: string };
-  http: { port: number; host: string; publicBaseUrl: string; adminToken: string; allowedOrigins: string[] };
+  http: { port: number; host: string; publicBaseUrl: string; adminToken: string; adminPath: string; allowedOrigins: string[] };
   jobs: { sweepIntervalSeconds: number; notifyWebhook: string };
   service: { title: string; price: string; currency: string; deliveryDays: number; category: string; skillTag: string };
 }
@@ -130,6 +130,8 @@ export function getConfig(): Config {
       host: env("HTTP_HOST", "0.0.0.0"),
       publicBaseUrl: env("PUBLIC_BASE_URL", `http://localhost:${port}`).replace(/\/+$/, ""),
       adminToken: env("ADMIN_TOKEN"),
+      // Where the operator page is served (default /admin); set a random path in production.
+      adminPath: "/" + env("ADMIN_PATH", "/admin").replace(/^\/+|\/+$/g, ""),
       allowedOrigins: env("ALLOWED_ORIGINS")
         .split(",")
         .map((s) => s.trim().replace(/\/+$/, ""))

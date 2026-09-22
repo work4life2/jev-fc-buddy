@@ -40,8 +40,10 @@ HOST="$(sed -nE 's#^PUBLIC_BASE_URL=https?://([^/]+).*#\1#p' .env.local 2>/dev/n
 if [ -n "$HOST" ] && [ -d /etc/nginx/sites-enabled ]; then
   SITE=/etc/nginx/sites-available/jev-fc-buddy
   sed "s/__HOST__/$HOST/g" deploy/nginx.conf > "$SITE"
+  ADMIN="$(sed -nE 's#^ADMIN_PATH=/?([^/[:space:]]+)/?.*#/\1#p' .env.local 2>/dev/null | tail -1)"
+  install -m 644 deploy/nginx-http.conf /etc/nginx/conf.d/jev-fc-buddy.conf
   if [ -f "/etc/letsencrypt/live/$HOST/fullchain.pem" ]; then
-    sed "s/__HOST__/$HOST/g" deploy/nginx-tls.conf >> "$SITE"
+    sed "s/__HOST__/$HOST/g; s#__ADMIN__#${ADMIN:-/admin}#g" deploy/nginx-tls.conf >> "$SITE"
   else
     echo "[deploy] no certificate for $HOST yet: https block not installed (run deploy/server-bootstrap.sh or certbot)" >&2
   fi
