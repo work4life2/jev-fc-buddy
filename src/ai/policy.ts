@@ -40,6 +40,8 @@ export interface PolicyMemory {
   level: number;
   /** A positional evasion (leave a shooter, sidestep a fan) is kept for a while so rules do not thrash. */
   commit?: { intent: Intent; why: string; until: number };
+  /** Direction of the last "leave the shooter" move, to flip it when it produced no movement. */
+  aimedDir?: 1 | -1;
 }
 
 export function newMemory(): PolicyMemory {
@@ -250,6 +252,11 @@ function jumpIsSafe(rel: Rel[]): boolean {
   return !rel.some((e) => e.category === "projectile" && Math.abs(e.dx) + Math.abs(e.dy) < 96 && (e.approaching || Math.abs(e.dx) < 32));
 }
 
+/** The partner is well ahead: the shared screen cannot scroll until the buddy catches up, so it must keep moving. */
+export function lagging(game: GameProfile, obs: Observation, sign: 1 | -1): boolean {
+  return obs.human.alive && (obs.human.x - obs.ai.x) * sign > game.reflex.followDistance * 2;
+}
+
 /** Can the buddy walk backwards right now? Not at the trailing screen edge, not into a drop or off a ledge. */
 export function canRetreat(game: GameProfile, obs: Observation, mem: PolicyMemory, sign: 1 | -1): boolean {
   if (sign > 0 ? obs.ai.x < 28 : obs.ai.x > obs.screen.width - 28) return false;
@@ -258,6 +265,22 @@ export function canRetreat(game: GameProfile, obs: Observation, mem: PolicyMemor
   const back = edgeAhead(game, obs, (sign * -1) as 1 | -1);
   if (back && !back.dropOk && back.dist < 16) return false;
   return true;
+}
+
+/**
+ * Standing still at a dead end (edge, pit, waiting to jump) gets the buddy shot when a shooter on
+ * another height is in range: back off a few steps instead and come back when the air is clear.
+ */
+function stopSafely(game: GameProfile, obs: Observation, mem: PolicyMemory, rel: Rel[], sign: 1 | -1, now: number, why: string): { intent: Intent; why: string } {
+  const shooters = rel.filter((e) => e.category === "hostile" && Math.abs(e.dy) > 28 && Math.abs(e.dy) < 130 && Math.abs(e.dx) < 120 && isShooter(game, e));
+  const bullets = rel.some((e) => e.category === "projectile" && Math.abs(e.dx) + Math.abs(e.dy) < 120);
+  // Backing off only helps when it moves us away from the shooter, never back over one behind us.
+  const awayIsBack = shooters.length ? shooters.every((e) => e.dx > 16) : bullets;
+  if (awayIsBack && canRetreat(game, obs, mem, sign)) {
+    mem.commit = { intent: "retreat", why: `${why}; under fire → back off instead of standing`, until: now + 350 };
+    return { intent: "retreat", why: mem.commit.why };
+  }
+  return { intent: "hold_fire", why };
 }
 
 /** Enemies that stand and shoot (profile keepDistance list, or anything that takes more than one hit). */
@@ -330,7 +353,13 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
   const diver = rel.find((e) => e.category === "hostile" && Math.abs(e.dx) < 28 && e.dy < -12 && e.dy > -56 && e.vy > 0);
   if (diver && Math.abs(diver.dx) < 12 && diver.hp <= 1) return { intent: "aim_up_fire", why: `hostile dropping onto us (dx ${diver.dx}, dy ${diver.dy}) → shoot up` };
   if (diver) {
-    if (ai.onGround && now - mem.lastJumpAt > 900) return { intent: "jump_back", why: `hostile dropping in (dx ${diver.dx}, dy ${diver.dy}) → hop back` };
+    if (!canRetreat(game, obs, mem, sign)) {
+      if (Math.abs(diver.dx) < 16) return { intent: "aim_up_fire", why: `hostile dropping onto us (dx ${diver.dx}), no way back → shoot up` };
+      // Lagging behind the partner locks the screen for both: walk into the fire line while shooting instead of standing.
+      if (diver.dx > 12 && lagging(game, obs, sign) && diver.hp <= 1) return { intent: "advance_fire", why: `hostile dropping in ahead (dx ${diver.dx}), partner waits on us → shoot it on the move` };
+      return { intent: diver.dx > 0 ? "hold_fire" : "retreat", why: `hostile dropping in ${diver.dx > 0 ? "ahead" : "behind"} (dx ${diver.dx}), no way back → face it and fire` };
+    }
+    if (ai.onGround && now - mem.lastJumpAt > 900 && jumpIsSafe(rel)) return { intent: "jump_back", why: `hostile dropping in (dx ${diver.dx}, dy ${diver.dy}) → hop back` };
     return { intent: "retreat", why: `hostile dropping in (dx ${diver.dx}, dy ${diver.dy})` };
   }
   // 1c. The platform ends ahead (learned map). Prefer a jump to a platform at the same height or higher
@@ -341,24 +370,24 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
   if (edge && ai.onGround) {
     const up = edge.landing !== undefined && edge.landing.dy <= 0;
     if (edge.landing && (up || !edge.dropOk)) {
-      if (partnerBehind && edge.dist <= 10) return { intent: "hold_fire", why: `platform ends, partner behind → wait here` };
+      if (partnerBehind && edge.dist <= 10) return stopSafely(game, obs, mem, rel, sign, now, `platform ends, partner behind → wait here`);
       // Take off as soon as a running jump reaches the next ledge (before the edge when it is close), never past it.
       const kind = jumpKindFor(edge, ai.levelX, sign);
       if (!partnerBehind && edge.dist > -6 && kind !== "early") {
         if (kind && (jumpIsSafe(rel) || edge.dist <= 2)) return { intent: kind, why: `platform ends → ${kind === "jump_up" ? "jump straight up onto the ledge" : "jump to the next one"} (dx ${edge.landing.dx.toFixed(0)}, dy ${edge.landing.dy})` };
-        if (kind) return { intent: "hold_fire", why: `platform ends, bullets in the air → wait before jumping` };
-        if (edge.dist <= 10) return { intent: "hold_fire", why: `platform ends, no jump lands on the next ledge from here → stop` };
+        if (kind) return stopSafely(game, obs, mem, rel, sign, now, `platform ends, bullets in the air → wait before jumping`);
+        if (edge.dist <= 10) return stopSafely(game, obs, mem, rel, sign, now, `platform ends, no jump lands on the next ledge from here → stop`);
       }
     } else if (!edge.dropOk && edge.dist <= 14) {
-      if (partnerBehind) return { intent: "hold_fire", why: `platform ends (${edge.dist.toFixed(0)}px), partner behind → wait here` };
+      if (partnerBehind) return stopSafely(game, obs, mem, rel, sign, now, `platform ends (${edge.dist.toFixed(0)}px), partner behind → wait here`);
       if (knownDrop && knownDrop.kind === "hop") return undefined; // the hop rule below takes it from the edge
       if (knownDrop && knownDrop.kind === "pit") {
         if (obs.human.alive && obs.human.y < ai.y - 40 && now - mem.lastJumpAt > 900 && jumpIsSafe(rel)) return { intent: "jump_forward", why: `dead end, partner above → try to climb` };
-        return { intent: "hold_fire", why: `platform ends over a known drop, nothing to land on → stop` };
+        return stopSafely(game, obs, mem, rel, sign, now, `platform ends over a known drop, nothing to land on → stop`);
       }
       // Nothing known beyond: jump and find out (once it kills us it becomes a known drop).
       if (edge.dist <= 6 && now - mem.lastJumpAt > 900 && jumpIsSafe(rel)) return { intent: "jump_forward", why: `platform ends, nothing known beyond → jump and see` };
-      if (edge.dist <= 6) return { intent: "hold_fire", why: `platform ends, bullets in the air → wait` };
+      if (edge.dist <= 6) return stopSafely(game, obs, mem, rel, sign, now, `platform ends, bullets in the air → wait`);
     }
   }
   // 1d. A shooter on another height (below a ledge, on a ledge above) aims at wherever we stand:
@@ -371,9 +400,12 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
       // Through, not back and forth: run past it (its shots land where we were), back only to stay with the partner.
       const partnerSide: 1 | -1 = obs.human.alive ? ((obs.human.x - ai.x) * sign >= 0 ? 1 : -1) : 1;
       let dir: 1 | -1 | 0 = partnerSide < 0 && aimed.dx > 16 ? -1 : 1;
+      // Still standing after the last move in that direction: something blocks it, go the other way.
+      if (still > 900 && mem.aimedDir === dir && aimed.dx > 24) dir = (dir * -1) as 1 | -1; // never back over a shooter that is behind/below us
       if (dir < 0 && !canRetreat(game, obs, mem, sign)) dir = 1; // nowhere to go back to: run past it instead
       if (dir > 0 && edge && !edge.dropOk && !edge.landing && edge.dist < 24) dir = canRetreat(game, obs, mem, sign) ? -1 : 0; // never off the ledge
       if (dir !== 0) {
+        mem.aimedDir = dir;
         mem.commit = { intent: dir === sign ? "advance_fire" : "retreat", why: `shooter ${aimed.dy > 0 ? "below" : "above"} (dx ${aimed.dx}, dy ${aimed.dy}) aims at us → keep moving ${dir > 0 ? "on" : "back"}`, until: now + 450 };
         return { intent: mem.commit.intent, why: mem.commit.why };
       }
@@ -384,6 +416,7 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
   if (touch) {
     if (touch.approaching && ai.onGround && now - mem.lastJumpAt > 900 && Math.abs(touch.dx) < 20) return { intent: "jump_back", why: `hostile about to touch (dx ${touch.dx}) → hop back` };
     if (touch.dx < 0) return { intent: "retreat", why: `hostile behind (dx ${touch.dx})` };
+    if (touch.dx > 12 && touch.hp <= 1 && lagging(game, obs, sign)) return { intent: "advance_fire", why: `hostile close ahead (dx ${touch.dx}), partner waits on us → shoot it on the move` };
     return { intent: "hold_fire", why: `hostile close ahead (dx ${touch.dx})` };
   }
   // 2b. Pits (bridges that explode once crossed). Inside: never stop. Ahead: cross together with the
@@ -394,9 +427,12 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
     if (gap.inside && !ai.onGround) return undefined;
     // A running jump covers ~59 px: take off so that it lands past the far edge, not at its start.
     const takeoff = Math.max(4, Math.min(24, JUMP.across - gap.width - 12));
-    if (gap.dxStart <= takeoff && gap.dxStart > -6) {
-      if (ai.onGround && now - mem.lastJumpAt > 300 && (jumpIsSafe(rel) || gap.dxStart <= 4)) return { intent: "jump_forward", why: `drop ahead (dx ${gap.dxStart.toFixed(0)}, ${gap.width}px) → jump` };
-      return { intent: "hold_fire", why: `drop ahead (dx ${gap.dxStart.toFixed(0)}) but cannot jump now → wait at the edge` };
+    // The learned ledge end is more precise than the zone: never run past it before pressing jump.
+    const atLedge = edge !== undefined && !edge.dropOk && edge.dist <= 12 && gap.dxStart <= 40;
+    if ((gap.dxStart <= takeoff || atLedge) && gap.dxStart > -6) {
+      // At the very edge press jump again even inside the throttle: a press that came a pixel late did nothing.
+      if (ai.onGround && (now - mem.lastJumpAt > 300 || gap.dxStart <= 6 || (edge !== undefined && edge.dist <= 4)) && (jumpIsSafe(rel) || gap.dxStart <= 6)) return { intent: "jump_forward", why: `drop ahead (dx ${gap.dxStart.toFixed(0)}, ${gap.width}px) → jump` };
+      return stopSafely(game, obs, mem, rel, sign, now, `drop ahead (dx ${gap.dxStart.toFixed(0)}) but cannot jump now → wait at the edge`);
     }
     if (gap.dxStart <= 60) return { intent: "advance_fire", why: `drop in ${gap.dxStart.toFixed(0)}px → run up to it` };
   } else if (gap && gap.kind === "pit") {
@@ -407,7 +443,7 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
       if (kind === "early") return undefined;
       if (edge?.landing && kind && ai.onGround && now - mem.lastJumpAt > 600 && (jumpIsSafe(rel) || gap.dxStart < 8)) return { intent: kind, why: `pit ahead (dx ${gap.dxStart.toFixed(0)}) → ${kind} to the platform at dy ${edge.landing.dy}` };
       if (obs.human.alive && obs.human.y < ai.y - 40 && ai.onGround && now - mem.lastJumpAt > 900) return { intent: "jump_forward", why: `pit ahead (dx ${gap.dxStart.toFixed(0)}), partner above → try to climb` };
-      return { intent: "hold_fire", why: `pit ahead (dx ${gap.dxStart.toFixed(0)}) → stop, this route ends here` };
+      return stopSafely(game, obs, mem, rel, sign, now, `pit ahead (dx ${gap.dxStart.toFixed(0)}) → stop, this route ends here`);
     }
   } else if (gap) {
     if (gap.inside) return { intent: "advance_fire", why: `on the bridge (${gap.dxEnd.toFixed(0)}px to go) → keep moving` };
@@ -432,7 +468,11 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
   // 3. Sniper / turret above us: straight up when overhead, diagonal when it is ahead and above.
   const above = rel.find((e) => e.category === "hostile" && Math.abs(e.dx) < 24 && e.dy < -20 && e.dy > -90);
   // Very close overhead, or a turret that cannot be one-shot (hp > 1): do not stand under it.
-  if (above && above.dy > -44) return { intent: "retreat", why: `hostile right overhead (dx ${above.dx}, dy ${above.dy}) → step back` };
+  if (above && above.dy > -44) {
+    if (canRetreat(game, obs, mem, sign)) return { intent: "retreat", why: `hostile right overhead (dx ${above.dx}, dy ${above.dy}) → step back` };
+    mem.commit = { intent: "advance_fire", why: `hostile right overhead (dx ${above.dx}, dy ${above.dy}), no way back → run out from under it`, until: now + 500 };
+    return { intent: mem.commit.intent, why: mem.commit.why };
+  }
   return undefined;
 }
 
@@ -448,7 +488,10 @@ export function heuristicIntent(game: GameProfile, obs: Observation, mem: Policy
   // Weapon capsule flying past above: shoot it down. Weapon item on the ground nearby: go get it.
   const capsule = items.find((e) => e.type === 3 && Math.abs(e.dx) < 56 && e.dy < -16 && e.dy > -96);
   if (capsule) return { intent: "aim_up_fire", why: "shoot the weapon capsule" };
-  const pickup = items.find((e) => e.type !== 3 && Math.abs(e.dx) < (r.itemDistance ?? 96) && Math.abs(e.dy) < 48 && hostile.every((h) => h.dist > 48));
+  // A power-up is not worth a detour into a shooter's reach.
+  const shooterInReach = hostile.some((e) => Math.abs(e.dy) > 28 && Math.abs(e.dy) < 130 && Math.abs(e.dx) < 110 && isShooter(game, e));
+  const partnerBehindUs = obs.human.alive && (obs.human.x - ai.x) * sign < -16;
+  const pickup = items.find((e) => e.type !== 3 && Math.abs(e.dx) < (r.itemDistance ?? 96) && Math.abs(e.dy) < 48 && hostile.every((h) => h.dist > 48) && !shooterInReach && (e.dx >= 0 || partnerBehindUs));
   if (pickup) return { intent: pickup.dx >= 0 ? "advance_fire" : "retreat", why: `weapon item ${pickup.dx >= 0 ? "ahead" : "behind"} (dx ${pickup.dx})` };
 
   // Cover the partner: an enemy close to them that we can hit from here comes before our own targets.
@@ -462,7 +505,13 @@ export function heuristicIntent(game: GameProfile, obs: Observation, mem: Policy
     }
   }
   const above = hostile.find((e) => Math.abs(e.dx) < 24 && e.dy < -20 && e.dy > -90);
-  if (above && above.hp > 1) return { intent: "retreat", why: `turret overhead (hp ${above.hp}) → step back` };
+  if (above && above.hp > 1) {
+    // A turret cannot be shot from here: run out from under it in one go (back only to stay with a partner behind).
+    const partnerBehind = obs.human.alive && (obs.human.x - ai.x) * sign < -16;
+    const back = partnerBehind && canRetreat(game, obs, mem, sign);
+    mem.commit = { intent: back ? "retreat" : "advance_fire", why: `turret overhead (hp ${above.hp}) → run ${back ? "back" : "past it"}`, until: now + 600 };
+    return { intent: mem.commit.intent, why: mem.commit.why };
+  }
   if (above) return { intent: "aim_up_fire", why: `hostile above (dy ${above.dy})` };
   const diag = hostile.find((e) => e.dx >= 24 && e.dx < 96 && e.dy < -r.aimUpHeight && e.dy > -100 && Math.abs(Math.abs(e.dx) - Math.abs(e.dy)) < 40);
   if (diag) return { intent: "aim_diag_fire", why: `hostile up-ahead (dx ${diag.dx}, dy ${diag.dy}) → diagonal` };
@@ -471,7 +520,7 @@ export function heuristicIntent(game: GameProfile, obs: Observation, mem: Policy
     // Standing still is what gets the buddy shot when a sniper on another height is aiming: keep walking
     // (turbo fire kills a runner just the same) and only plant the feet when it is close.
     const underAim = hostile.some((e) => Math.abs(e.dy) > 28 && Math.abs(e.dy) < 130 && Math.abs(e.dx) < 110 && isShooter(game, e));
-    const stand = (ahead.approaching || ahead.hp > 1) && !(underAim && ahead.dx > 48 && ahead.hp <= 1);
+    const stand = (ahead.approaching || ahead.hp > 1) && !(underAim && ahead.dx > 48 && ahead.hp <= 1) && !(lagging(game, obs, sign) && ahead.hp <= 1 && ahead.dx > 24);
     return { intent: stand ? "hold_fire" : "advance_fire", why: `hostile ahead (dx ${ahead.dx}${ahead.approaching ? ", closing" : ""})${underAim && !stand ? ", under aimed fire → keep moving" : ""}` };
   }
   const behind = hostile.find((e) => e.dx < 0 && e.dx > -r.engageDistance && Math.abs(e.dy) < 24 && e.approaching);
@@ -480,7 +529,8 @@ export function heuristicIntent(game: GameProfile, obs: Observation, mem: Policy
   if (obs.human.alive) {
     const dxP = (obs.human.x - ai.x) * sign;
     const dyP = obs.human.y - ai.y;
-    if (dyP < -40 && Math.abs(dxP) < 96 && ai.onGround && now - mem.lastJumpAt > 900) return { intent: "jump_forward", why: `partner is ${-dyP}px above → try to climb` };
+    const shooterNear = hostile.some((e) => Math.abs(e.dy) > 28 && Math.abs(e.dy) < 130 && Math.abs(e.dx) < 100 && isShooter(game, e));
+    if (dyP < -40 && Math.abs(dxP) < 96 && ai.onGround && now - mem.lastJumpAt > 900 && jumpIsSafe(rel) && !shooterNear) return { intent: "jump_forward", why: `partner is ${-dyP}px above → try to climb` };
     if (dxP < -r.followDistance) return { intent: "hold_fire", why: `ahead of partner by ${-dxP}px, covering` };
     if (dxP > r.followDistance * 2) return { intent: "follow_partner", why: `partner ${dxP}px ahead` };
   }
@@ -509,7 +559,10 @@ export function actionFor(game: GameProfile, obs: Observation, intent: Intent, m
     const upAhead = relative(obs, edgeSign as 1 | -1).find((e) => e.category === "hostile" && e.dx > 0 && e.dx < 110 && e.dy < -24 && e.dy > -100);
     intent = upAhead ? "aim_diag_fire" : "hold_fire";
   }
-  if (atTrailingEdge && intent === "jump_back") intent = "jump_forward";
+  if (atTrailingEdge && intent === "jump_back") {
+    const hostileAhead = relative(obs, edgeSign as 1 | -1).some((e) => e.category === "hostile" && e.dx > -8 && e.dx < 48 && Math.abs(e.dy) < 40);
+    intent = hostileAhead ? "hold_fire" : "jump_forward";
+  }
   const fire = game.buttons.fire as Button;
   const jump = game.buttons.jump as Button;
   const prone = (game.buttons.prone ?? "DOWN") as Button;

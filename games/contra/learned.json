@@ -1,10 +1,10 @@
 {
  "version": 1,
- "updatedAt": "2026-09-22T08:00:28.346Z",
- "episodes": 151,
+ "updatedAt": "2026-09-22T10:57:17.356Z",
+ "episodes": 438,
  "levels": {
   "0": {
-   "deaths": 233,
+   "deaths": 765,
    "pits": [
     [
      1724,
@@ -16,11 +16,11 @@
     ],
     [
      1915,
-     1946,
-     172,
+     1995,
+     140,
      240,
      "pit",
-     14
+     63
     ],
     [
      2075,
@@ -28,59 +28,76 @@
      76,
      240,
      "pit",
-     21
+     27
     ],
     [
      2253,
-     2299,
-     108,
+     2322,
+     76,
      240,
      "pit",
-     41
+     43
     ],
     [
      2366,
-     2420,
+     2490,
      108,
      240,
-     "pit",
-     17
-    ],
-    [
-     2441,
-     2490,
-     140,
-     240,
-     "pit",
-     3
+     "hop",
+     27
     ],
     [
      2515,
-     2543,
-     172,
-     240,
-     "pit",
-     2
-    ],
-    [
-     2556,
-     2585,
+     2586,
      44,
      240,
      "pit",
-     4
+     8
     ]
    ],
    "killZones": [
     {
-     "x1": 584,
-     "x2": 628,
+     "x1": 269,
+     "x2": 354,
      "yMin": 88,
      "yMax": 112,
      "cause": "shot",
      "from": "below",
-     "count": 6,
-     "still": 1,
+     "count": 46,
+     "still": 19,
+     "advice": "shots come up from below here: never stand over the shooter, step aside"
+    },
+    {
+     "x1": 584,
+     "x2": 617,
+     "yMin": 88,
+     "yMax": 112,
+     "cause": "shot",
+     "from": "below",
+     "count": 26,
+     "still": 0,
+     "advice": "shots come up from below here: never stand over the shooter, step aside"
+    },
+    {
+     "x1": 592,
+     "x2": 624,
+     "yMin": 88,
+     "yMax": 112,
+     "cause": "shot",
+     "from": "level",
+     "count": 2,
+     "still": 0,
+     "advice": "bullets at body height here: lie prone when one comes, do not jump into it"
+    },
+    {
+     "x1": 594,
+     "x2": 630,
+     "yMin": 88,
+     "yMax": 112,
+     "cause": "shot",
+     "from": "below",
+     "count": 4,
+     "still": 8,
      "advice": "shots come up from below here: never stand over the shooter, step aside"
     },
     {
@@ -96,14 +113,91 @@
     },
     {
      "x1": 601,
+     "x2": 633,
+     "yMin": 88,
+     "yMax": 112,
+     "cause": "contact",
+     "from": "level",
+     "count": 2,
+     "still": 13,
+     "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
+    },
+    {
+     "x1": 601,
+     "x2": 633,
+     "yMin": 88,
+     "yMax": 112,
+     "cause": "shot",
+     "from": "level",
+     "count": 2,
+     "still": 0,
+     "advice": "bullets at body height here: lie prone when one comes, do not jump into it"
+    },
+    {
+     "x1": 601,
+     "x2": 633,
+     "yMin": 88,
+     "yMax": 112,
+     "cause": "shot",
+     "from": "below",
+     "count": 4,
+     "still": 0,
+     "advice": "shots come up from below here: never stand over the shooter, step aside"
+    },
+    {
+     "x1": 607,
      "x2": 639,
      "yMin": 88,
      "yMax": 112,
      "cause": "contact",
      "from": "level",
-     "count": 4,
-     "still": 17,
+     "count": 2,
+     "still": 20,
      "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
+    },
+    {
+     "x1": 630,
+     "x2": 662,
+     "yMin": 88,
+     "yMax": 112,
+     "cause": "shot",
+     "from": "above",
+     "count": 2,
+     "still": 38,
+     "advice": "a shooter above kills anyone who stops here: keep moving through, never stand or wait"
+    },
+    {
+     "x1": 631,
+     "x2": 663,
+     "yMin": 88,
+     "yMax": 112,
+     "cause": "shot",
+     "from": "below",
+     "count": 3,
+     "still": 65,
+     "advice": "shots come up from below here: never stand over the shooter, step aside"
+    },
+    {
+     "x1": 631,
+     "x2": 663,
+     "yMin": 88,
+     "yMax": 112,
+     "cause": "shot",
+     "from": "above",
+     "count": 6,
+     "still": 38,
+     "advice": "a shooter above kills anyone who stops here: keep moving through, never stand or wait"
+    },
+    {
+     "x1": 633,
+     "x2": 666,
+     "yMin": 78,
+     "yMax": 112,
+     "cause": "shot",
+     "from": "above",
+     "count": 5,
+     "still": 53,
+     "advice": "a shooter above kills anyone who stops here: keep moving through, never stand or wait"
     },
     {
      "x1": 640,
@@ -117,26 +211,125 @@
      "advice": "shots come up from below here: never stand over the shooter, step aside"
     },
     {
-     "x1": 840,
-     "x2": 941,
+     "x1": 798,
+     "x2": 866,
+     "yMin": 200,
+     "yMax": 224,
+     "cause": "contact",
+     "from": "level",
+     "count": 22,
+     "still": 1,
+     "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
+    },
+    {
+     "x1": 842,
+     "x2": 874,
+     "yMin": 82,
+     "yMax": 106,
+     "cause": "contact",
+     "from": "behind",
+     "count": 2,
+     "still": 0,
+     "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
+    },
+    {
+     "x1": 854,
+     "x2": 893,
+     "yMin": 65,
+     "yMax": 112,
+     "cause": "contact",
+     "from": "level",
+     "count": 11,
+     "still": 269,
+     "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
+    },
+    {
+     "x1": 907,
+     "x2": 943,
      "yMin": 57,
      "yMax": 95,
      "cause": "contact",
      "from": "level",
-     "count": 6,
-     "still": 324,
+     "count": 5,
+     "still": 371,
+     "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
+    },
+    {
+     "x1": 1016,
+     "x2": 1102,
+     "yMin": 200,
+     "yMax": 224,
+     "cause": "contact",
+     "from": "level",
+     "count": 4,
+     "still": 112,
+     "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
+    },
+    {
+     "x1": 1076,
+     "x2": 1108,
+     "yMin": 200,
+     "yMax": 224,
+     "cause": "shot",
+     "from": "above",
+     "count": 2,
+     "still": 15,
+     "advice": "diagonal shots from above land here: lie prone the moment one is close, keep moving otherwise"
+    },
+    {
+     "x1": 1109,
+     "x2": 1141,
+     "yMin": 200,
+     "yMax": 224,
+     "cause": "contact",
+     "from": "behind",
+     "count": 4,
+     "still": 0,
      "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
     },
     {
      "x1": 1126,
-     "x2": 1159,
+     "x2": 1164,
      "yMin": 62,
-     "yMax": 87,
+     "yMax": 103,
      "cause": "contact",
      "from": "level",
-     "count": 3,
-     "still": 572,
+     "count": 5,
+     "still": 710,
      "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
+    },
+    {
+     "x1": 1156,
+     "x2": 1228,
+     "yMin": 200,
+     "yMax": 224,
+     "cause": "shot",
+     "from": "above",
+     "count": 23,
+     "still": 9,
+     "advice": "diagonal shots from above land here: lie prone the moment one is close, keep moving otherwise"
+    },
+    {
+     "x1": 1196,
+     "x2": 1228,
+     "yMin": 200,
+     "yMax": 224,
+     "cause": "shot",
+     "from": "behind",
+     "count": 4,
+     "still": 0,
+     "advice": "bullets arrive from behind here: face back and shoot, or lie prone"
+    },
+    {
+     "x1": 1197,
+     "x2": 1281,
+     "yMin": 200,
+     "yMax": 224,
+     "cause": "shot",
+     "from": "above",
+     "count": 67,
+     "still": 108,
+     "advice": "a shooter above kills anyone who stops here: keep moving through, never stand or wait"
     },
     {
      "x1": 1276,
@@ -145,9 +338,20 @@
      "yMax": 112,
      "cause": "shot",
      "from": "level",
-     "count": 9,
-     "still": 538,
+     "count": 28,
+     "still": 278,
      "advice": "bullets at body height here: lie prone when one comes, do not jump into it"
+    },
+    {
+     "x1": 1308,
+     "x2": 1340,
+     "yMin": 88,
+     "yMax": 112,
+     "cause": "contact",
+     "from": "level",
+     "count": 2,
+     "still": 115,
+     "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
     },
     {
      "x1": 1486,
@@ -161,25 +365,91 @@
      "advice": "bullets at body height here: lie prone when one comes, do not jump into it"
     },
     {
-     "x1": 1696,
+     "x1": 1500,
+     "x2": 1533,
+     "yMin": 56,
+     "yMax": 80,
+     "cause": "shot",
+     "from": "level",
+     "count": 2,
+     "still": 177,
+     "advice": "bullets at body height here: lie prone when one comes, do not jump into it"
+    },
+    {
+     "x1": 1508,
+     "x2": 1540,
+     "yMin": 56,
+     "yMax": 80,
+     "cause": "shot",
+     "from": "below",
+     "count": 13,
+     "still": 0,
+     "advice": "shots come up from below here: never stand over the shooter, step aside"
+    },
+    {
+     "x1": 1554,
+     "x2": 1633,
+     "yMin": 39,
+     "yMax": 80,
+     "cause": "shot",
+     "from": "below",
+     "count": 25,
+     "still": 36,
+     "advice": "shots come up from below here: never stand over the shooter, step aside"
+    },
+    {
+     "x1": 1623,
+     "x2": 1655,
+     "yMin": 200,
+     "yMax": 224,
+     "cause": "shot",
+     "from": "above",
+     "count": 2,
+     "still": 0,
+     "advice": "diagonal shots from above land here: lie prone the moment one is close, keep moving otherwise"
+    },
+    {
+     "x1": 1692,
      "x2": 1754,
      "yMin": 56,
      "yMax": 80,
      "cause": "shot",
      "from": "below",
-     "count": 6,
-     "still": 0,
+     "count": 8,
+     "still": 3,
      "advice": "shots come up from below here: never stand over the shooter, step aside"
     },
     {
      "x1": 1727,
      "x2": 1822,
-     "yMin": 47,
+     "yMin": 46,
+     "yMax": 80,
+     "cause": "shot",
+     "from": "below",
+     "count": 14,
+     "still": 30,
+     "advice": "shots come up from below here: never stand over the shooter, step aside"
+    },
+    {
+     "x1": 1818,
+     "x2": 1857,
+     "yMin": 184,
+     "yMax": 208,
+     "cause": "shot",
+     "from": "above",
+     "count": 27,
+     "still": 21,
+     "advice": "a shooter above kills anyone who stops here: keep moving through, never stand or wait"
+    },
+    {
+     "x1": 1830,
+     "x2": 1863,
+     "yMin": 56,
      "yMax": 80,
      "cause": "shot",
      "from": "below",
      "count": 10,
-     "still": 18,
+     "still": 0,
      "advice": "shots come up from below here: never stand over the shooter, step aside"
     },
     {
@@ -205,14 +475,14 @@
      "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
     },
     {
-     "x1": 1936,
+     "x1": 1974,
      "x2": 2032,
      "yMin": 79,
      "yMax": 112,
      "cause": "shot",
      "from": "below",
-     "count": 2,
-     "still": 22,
+     "count": 7,
+     "still": 9,
      "advice": "shots come up from below here: never stand over the shooter, step aside"
     },
     {
@@ -230,23 +500,34 @@
      "x1": 2002,
      "x2": 2035,
      "yMin": 72,
-     "yMax": 107,
+     "yMax": 112,
      "cause": "shot",
      "from": "below",
-     "count": 6,
-     "still": 47,
+     "count": 15,
+     "still": 19,
      "advice": "shots come up from below here: never stand over the shooter, step aside"
     },
     {
      "x1": 2003,
-     "x2": 2060,
-     "yMin": 78,
+     "x2": 2061,
+     "yMin": 71,
      "yMax": 112,
      "cause": "shot",
      "from": "below",
-     "count": 11,
-     "still": 960,
+     "count": 49,
+     "still": 346,
      "advice": "shots come up from below here: never stand over the shooter, step aside"
+    },
+    {
+     "x1": 2054,
+     "x2": 2097,
+     "yMin": 32,
+     "yMax": 63,
+     "cause": "contact",
+     "from": "level",
+     "count": 2,
+     "still": 104,
+     "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
     },
     {
      "x1": 2067,
@@ -255,20 +536,42 @@
      "yMax": 121,
      "cause": "contact",
      "from": "level",
-     "count": 4,
-     "still": 116,
+     "count": 5,
+     "still": 121,
      "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
     },
     {
      "x1": 2105,
-     "x2": 2164,
-     "yMin": 56,
+     "x2": 2194,
+     "yMin": 48,
      "yMax": 80,
      "cause": "shot",
      "from": "level",
-     "count": 10,
-     "still": 260,
+     "count": 47,
+     "still": 238,
      "advice": "bullets at body height here: lie prone when one comes, do not jump into it"
+    },
+    {
+     "x1": 2209,
+     "x2": 2241,
+     "yMin": 95,
+     "yMax": 119,
+     "cause": "contact",
+     "from": "behind",
+     "count": 2,
+     "still": 0,
+     "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
+    },
+    {
+     "x1": 2217,
+     "x2": 2249,
+     "yMin": 101,
+     "yMax": 125,
+     "cause": "contact",
+     "from": "behind",
+     "count": 2,
+     "still": 8,
+     "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
     },
     {
      "x1": 2219,
@@ -282,14 +585,14 @@
      "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
     },
     {
-     "x1": 2221,
+     "x1": 2219,
      "x2": 2253,
      "yMin": 95,
-     "yMax": 119,
+     "yMax": 131,
      "cause": "contact",
      "from": "level",
-     "count": 2,
-     "still": 225,
+     "count": 3,
+     "still": 188,
      "advice": "enemies run into the buddy here: shoot them at range, keep 40px, never walk into them"
     },
     {
@@ -317,18 +620,13 @@
    ],
    "platforms": [
     [
-     48,
+     32,
      216,
      100
     ],
     [
      232,
-     472,
-     100
-    ],
-    [
-     488,
-     752,
+     776,
      100
     ],
     [
@@ -337,32 +635,27 @@
      212
     ],
     [
+     800,
+     824,
+     100
+    ],
+    [
      848,
      1040,
      100
     ],
     [
      1144,
-     1176,
+     1448,
      100
     ],
     [
-     1208,
-     1400,
-     100
-    ],
-    [
-     1384,
+     1368,
      1896,
      68
     ],
     [
      1408,
-     1456,
-     196
-    ],
-    [
-     1472,
      1512,
      196
     ],
@@ -370,6 +663,11 @@
      1496,
      1736,
      212
+    ],
+    [
+     1496,
+     1576,
+     148
     ],
     [
      1720,
@@ -382,7 +680,12 @@
      100
     ],
     [
-     2064,
+     1920,
+     1976,
+     164
+    ],
+    [
+     2048,
      2216,
      68
     ],
@@ -403,13 +706,13 @@
     ],
     [
      2368,
-     2408,
-     132
+     2472,
+     164
     ],
     [
      2368,
-     2472,
-     164
+     2408,
+     132
     ],
     [
      2496,
@@ -422,7 +725,7 @@
      68
     ],
     [
-     2552,
+     2536,
      2568,
      148
     ]
@@ -430,10 +733,24 @@
    "badJumps": [
     [
      1363,
-     1407,
+     1409,
      212,
      196,
-     6
+     12
+    ],
+    [
+     1673,
+     1729,
+     212,
+     196,
+     56
+    ],
+    [
+     2248,
+     2282,
+     100,
+     196,
+     5
     ]
    ]
   }

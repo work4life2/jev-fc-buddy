@@ -139,9 +139,11 @@ export function learn(game: GameProfile, reports: EpisodeReport[]): Learned {
     }
     platforms.sort((a, b) => a[0] - b[0]);
     // Jumps toward a platform that did not land on it (a cliff face, a ledge that cannot be entered): remembered per edge.
-    const failed = reports
-      .flatMap((r) => r.jumps ?? [])
-      .filter((j) => j.level === lvl && !j.ok && j.targetY !== undefined)
+    // A death in the air says nothing about the ledge; and a ledge that was reached at least once is reachable.
+    const targeted = reports.flatMap((r) => r.jumps ?? []).filter((j) => j.level === lvl && j.targetY !== undefined && !j.died);
+    const reached = targeted.filter((j) => j.ok);
+    const failed = targeted
+      .filter((j) => !j.ok && !reached.some((s) => Math.abs(s.x - j.x) <= 32 && Math.abs(s.y - j.y) <= 4 && s.targetY === j.targetY))
       .map((j) => ({ x1: j.x - 16, x2: j.x + 16, y: j.y, targetY: j.targetY!, count: 1 }));
     const badJumps = cluster(
       failed,

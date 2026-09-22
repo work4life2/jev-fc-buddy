@@ -60,6 +60,8 @@ export interface JumpRecord {
   landedX: number;
   landedY: number;
   ok: boolean;
+  /** The buddy died in the air: says nothing about whether the ledge can be reached. */
+  died?: boolean;
 }
 
 export interface EpisodeReport {
@@ -264,7 +266,7 @@ export async function runEpisode(o: HarnessOptions): Promise<EpisodeReport> {
         // Died. Classify from what we saw just before.
         const p = prev;
         if (pendingJump) {
-          jumps.push({ level: pendingJump.level, x: pendingJump.x, y: pendingJump.y, targetY: pendingJump.targetY, landedX: p.ai.levelX, landedY: 240, ok: false });
+          jumps.push({ level: pendingJump.level, x: pendingJump.x, y: pendingJump.y, targetY: pendingJump.targetY, landedX: p.ai.levelX, landedY: 240, ok: false, died: true });
           pendingJump = undefined;
         }
         const rising = yHist.length >= 4 && yHist.every((y, i) => i === 0 || y >= yHist[i - 1]!) && yHist[yHist.length - 1]! - yHist[0]! >= 10;
