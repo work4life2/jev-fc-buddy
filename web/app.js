@@ -218,10 +218,9 @@
     const parts = [];
     for (const b of ["UP", "DOWN", "LEFT", "RIGHT"]) if (hold.includes(b) || turbo.includes(b)) parts.push(`<span class="arrow">${ARROW[b]}</span>`);
     for (const b of ["B", "A"]) if (hold.includes(b) || turbo.includes(b)) parts.push(`<span class="btn${turbo.includes(b) ? " turbo" : ""}">${b}</span>`);
-    const why = m.src === "jev" ? "JEV" : m.src === "reflex" ? "REFLEX" : (m.src || "").toUpperCase();
     const el = document.createElement("div");
     el.className = `note ${m.src || ""}`;
-    el.innerHTML = parts.join('<span class="plus">+</span>') + (why ? `<span class="why">${why}</span>` : "") + `<span class="t">${stamp()}</span>`;
+    el.innerHTML = parts.join('<span class="plus">+</span>');
     lane.appendChild(el);
     while (lane.children.length > 40) lane.removeChild(lane.firstChild);
   }
