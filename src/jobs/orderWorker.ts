@@ -103,7 +103,7 @@ export function deliveryText(code: CoinCode): string {
     ``,
     `Play here: ${cfg.http.playBaseUrl}/?code=${code.code}`,
     ``,
-    `How it works: open the link in a desktop browser, enter the code, pick a game (${games}) and press Insert Coin. You are player 1 (keyboard: WASD or arrows to move, J = fire, K = jump, Enter = start; or plug in any gamepad). The AI is player 2: it follows you, covers you and shoots what threatens you. Its every input and its live commentary scroll on the right side of the screen.`,
+    `How it works: open the link in a desktop browser, enter the code, pick a game (${games}) and press Insert Coin. You are player 1 (keyboard: WASD or arrows to move, J = fire, K = jump, Enter = start; or plug in any gamepad). The AI is player 2: it follows you, covers you and shoots what threatens you. Every button it presses lights up on the controller shown beside the game (switch to LOG for the text stream).`,
     ``,
     `The code works as many times as it has coins. Keep it private — anyone with the code can spend the coins.`,
   ].join("\n");
