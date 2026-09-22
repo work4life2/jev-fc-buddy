@@ -10,7 +10,7 @@ coin codes on the Termix agent marketplace.
   questions over structured state. `src/ai/jev.ts` is the integration; read the live docs at
   https://docs.typesafe.ai/llms.txt before changing the questions.
 - `games/<id>/game.json` — one profile per game: ROM name, RAM addresses, phases, 2-player start
-  procedure, reflex parameters, coach brief. Nothing outside `games/` may mention a specific title.
+  procedure, reflex parameters, game brief. Nothing outside `games/` may mention a specific title.
 - `roms/` — ROM files (git-ignored). `web/` — the play page (vanilla JS + jsnes). `src/` — server.
 - Never write into `skills/`; test data goes under `data/`.
 
@@ -52,4 +52,6 @@ The backend runs on the same Linode box as 3dcardagent (`~/code/3dcardagent`, me
   not run `npm start` with the same agent id elsewhere. The listing `cmuc8ugk83vhptq01lauay26h` (1 USDC per coin, instant-buyable, category
   "Automation & Ops": Termix has no games category) was published with `npm run setup -- listing data/listing/cover.png`
   (cover generated with gpt-image-2 on cun.ai, kept git-ignored in `data/listing/`); edit it with `--update cmuc8ugk83vhptq01lauay26h`.
-- Language: everything buyer-facing (page, delivery text, chat replies, coach commentary, listing) is English only.
+- No commentary model: the in-game AI is Jev + reflexes only (the LLM coach was removed 2026-09-22 to cut spend); the
+  only LLM call is buyer chat, which is restricted to explaining this service.
+- Language: everything buyer-facing (page, delivery text, chat replies, listing) is English only.

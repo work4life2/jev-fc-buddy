@@ -1,7 +1,6 @@
 import { getConfig } from "../config.js";
 import { logger } from "../log.js";
 import { genreOf, type GameProfile } from "../games/registry.js";
-import { Coach } from "./coach.js";
 import { jevDecide, jevEnabled, type JevAction, type JevDecision } from "./jev.js";
 import { observe, type Observation } from "./observe.js";
 import { actionFor, gapAhead, heuristicIntent, IDLE, newMemory, respawnSteer, sameAction, survivalIntent, type Action, type Button, type Intent, type PolicyMemory } from "./policy.js";
@@ -10,30 +9,26 @@ import { newTankMemory, TANK_INTENTS, tankDecide, type TankIntent, type TankMemo
 const log = logger("buddy");
 
 /** Messages the brain sends to the browser. */
-export type OpSource = "reflex" | "jev" | "coach" | "macro" | "system";
+export type OpSource = "reflex" | "jev" | "macro" | "system";
 
 export type BuddyMessage =
   | { type: "act"; controller: number; hold: Button[]; turbo: Button[]; tag: string; src: string }
   | { type: "op"; src: OpSource; text: string; detail?: Record<string, unknown>; at: number }
-  | { type: "say"; text: string; at: number }
-  | { type: "needShot" }
-  | { type: "status"; jev: boolean; coach: string; phase: string };
+  | { type: "status"; jev: boolean; phase: string };
 
 export interface BrainOptions {
   game: GameProfile;
-  lang: string;
   send: (m: BuddyMessage) => void;
 }
 
 /**
- * One brain per play session. Three layers:
- *   reflex (every tick, code)  →  Jev (typed decision, a few Hz)  →  coach (pi/LLM, every ~10 s)
- * Every decision that changes the controller is echoed to the ops stream (the danmaku).
+ * One brain per play session. Two layers:
+ *   reflex (every tick, code)  →  Jev (typed decision, a few Hz)
+ * Every decision that changes the controller is echoed to the ops stream (the browser's pad / log view).
  */
 export class BuddyBrain {
   private readonly game: GameProfile;
   private readonly send: (m: BuddyMessage) => void;
-  private readonly coach: Coach;
   private mem: PolicyMemory = newMemory();
   private tankMem: TankMemory = newTankMemory();
   private readonly tank: boolean;
@@ -42,25 +37,18 @@ export class BuddyBrain {
   private jev: { decision: JevDecision; at: number; askedAt: number } | undefined;
   private jevInflight = 0;
   private jevLastAt = 0;
-  private coachIntent: JevAction | "auto" = "auto";
-  private coachPlan = "";
-  private coachTimer: NodeJS.Timeout | undefined;
-  private pendingShot: string | undefined;
   private recent: string[] = [];
   private macroCooldownUntil = 0;
   private stopped = false;
-  private stats = { ticks: 0, jevCalls: 0, coachRounds: 0, aiDeaths: 0, humanDeaths: 0, actions: new Map<string, number>() };
+  private stats = { ticks: 0, jevCalls: 0, aiDeaths: 0, humanDeaths: 0, actions: new Map<string, number>() };
   private lastPhase = "";
 
   constructor(o: BrainOptions) {
     this.game = o.game;
     this.tank = genreOf(o.game) === "tank";
     this.send = o.send;
-    this.coach = new Coach(o.game, o.lang);
-    const { ai } = getConfig();
-    this.coachTimer = setInterval(() => void this.coachRound(), ai.coachIntervalSeconds * 1000);
-    this.send({ type: "status", jev: jevEnabled(), coach: this.coach.model, phase: "boot" });
-    this.op("system", jevEnabled() ? `Jev online (${getConfig().typesafe.model}${getConfig().typesafe.viaRelay ? " via relay" : ""}) · coach ${this.coach.model}` : `Jev offline (no relay/TypeSafe key) · reflex + coach ${this.coach.model}`);
+    this.send({ type: "status", jev: jevEnabled(), phase: "boot" });
+    this.op("system", jevEnabled() ? `Jev online (${getConfig().typesafe.model}${getConfig().typesafe.viaRelay ? " via relay" : ""})` : "Jev offline (no relay/TypeSafe key): reflex policy only");
   }
 
   private op(src: OpSource, text: string, detail?: Record<string, unknown>) {
@@ -70,10 +58,6 @@ export class BuddyBrain {
   private remember(line: string) {
     this.recent.push(line);
     if (this.recent.length > 12) this.recent.shift();
-  }
-
-  onScreenshot(jpegBase64: string) {
-    this.pendingShot = jpegBase64;
   }
 
   /** Called for every state report from the browser. */
@@ -87,7 +71,7 @@ export class BuddyBrain {
 
     if (obs.phase !== this.lastPhase) {
       this.lastPhase = obs.phase;
-      this.send({ type: "status", jev: jevEnabled(), coach: this.coach.model, phase: obs.phase });
+      this.send({ type: "status", jev: jevEnabled(), phase: obs.phase });
       this.remember(`phase → ${obs.phase}`);
       if (obs.phase === "playing") this.op("system", `level ${obs.level + 1} · go!`);
       if (obs.phase === "gameover") this.op("system", "game over");
@@ -150,7 +134,7 @@ export class BuddyBrain {
     }
   }
 
-  /** Tank genre: reflexes decide the buttons; Jev / the coach only choose the intent. */
+  /** Tank genre: reflexes decide the buttons; Jev only chooses the intent. */
   private playTank(obs: Observation, now: number) {
     const { ai } = getConfig();
     if (obs.ai.alive && jevEnabled() && this.jevInflight < 2 && now - this.jevLastAt >= 1000 / ai.jevHz) {
@@ -158,7 +142,7 @@ export class BuddyBrain {
       this.jevLastAt = now;
       this.stats.jevCalls++;
       const askedAt = now;
-      void jevDecide(this.game, obs, { coachIntent: this.coachIntent === "auto" ? this.coachPlan || undefined : `${this.coachIntent}: ${this.coachPlan}`, recent: this.recent.slice(-5) })
+      void jevDecide(this.game, obs, { recent: this.recent.slice(-5) })
         .then((d) => {
           if (!d || this.stopped) return;
           if (this.jev && this.jev.askedAt > askedAt) return;
@@ -175,9 +159,9 @@ export class BuddyBrain {
         })
         .finally(() => this.jevInflight--);
     }
-    // Intent: a fresh, reasonably confident Jev answer; else the coach; else the policy's own judgement.
+    // Intent: a fresh, reasonably confident Jev answer; else the policy's own judgement.
     let intent: TankIntent | "auto" = "auto";
-    let src: "jev" | "coach" | "reflex" = "reflex";
+    let src: "jev" | "reflex" = "reflex";
     const fresh = this.jev && now - this.jev.at < 1500 ? this.jev.decision : undefined;
     if (fresh && fresh.baseInDanger > 0.7) {
       intent = "defend_base";
@@ -188,9 +172,6 @@ export class BuddyBrain {
     } else if (fresh && fresh.action in TANK_INTENTS && (fresh.probabilities[fresh.action] ?? 0) >= 0.3) {
       intent = fresh.action as TankIntent;
       src = "jev";
-    } else if (this.coachIntent !== "auto" && this.coachIntent in TANK_INTENTS) {
-      intent = this.coachIntent as TankIntent;
-      src = "coach";
     }
     const action = tankDecide(this.game, obs, this.tankMem, now, intent);
     if (intent !== "auto" && !action.urgent) action.reason = `${action.reason} [${intent}]`;
@@ -229,7 +210,7 @@ export class BuddyBrain {
       this.jevLastAt = now;
       this.stats.jevCalls++;
       const askedAt = now;
-      void jevDecide(this.game, obs, { coachIntent: this.coachIntent === "auto" ? this.coachPlan || undefined : `${this.coachIntent}: ${this.coachPlan}`, recent: this.recent.slice(-5), gap })
+      void jevDecide(this.game, obs, { recent: this.recent.slice(-5), gap })
         .then((d) => {
           if (!d || this.stopped) return;
           if (this.jev && this.jev.askedAt > askedAt) return; // an answer to a newer state already arrived
@@ -248,9 +229,9 @@ export class BuddyBrain {
     }
 
     // 2. Pick the intent. Survival reflexes always win (a model round trip is too slow for a bullet);
-    //    then a fresh, confident Jev answer; then the coach's plan; then the built-in heuristics.
+    //    then a fresh, confident Jev answer; then the built-in heuristics.
     let intent: Intent;
-    let src: "jev" | "coach" | "reflex" = "reflex";
+    let src: "jev" | "reflex" = "reflex";
     let why = "";
     const fresh = this.jev && now - this.jev.at < 1200 ? this.jev.decision : undefined;
     const urgent = survivalIntent(this.game, obs, this.mem, now);
@@ -276,9 +257,6 @@ export class BuddyBrain {
     } else if (fresh && this.jevPick(fresh)) {
       intent = this.jevPick(fresh)! as Intent;
       src = "jev";
-    } else if (this.coachIntent !== "auto" && !(this.coachIntent in TANK_INTENTS)) {
-      intent = this.coachIntent as Intent;
-      src = "coach";
     } else {
       const h = heuristicIntent(this.game, obs, this.mem, now);
       intent = h.intent;
@@ -319,7 +297,7 @@ export class BuddyBrain {
     return pick;
   }
 
-  private apply(action: Action, src: "jev" | "coach" | "reflex") {
+  private apply(action: Action, src: "jev" | "reflex") {
     if (sameAction(action, this.last)) return;
     this.last = action;
     this.send({ type: "act", controller: this.game.players.ai, hold: action.hold, turbo: action.turbo, tag: action.tag, src });
@@ -330,48 +308,9 @@ export class BuddyBrain {
     }
   }
 
-  private summary(): string {
-    const acts = [...this.stats.actions.entries()]
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 5)
-      .map(([k, v]) => `${k}×${v}`)
-      .join(", ");
-    const lines = [
-      `Since the last round: ${this.recent.length ? this.recent.join("; ") : "nothing notable"}.`,
-      `Buddy inputs used: ${acts || "none"}. Jev calls: ${this.stats.jevCalls}. Buddy deaths so far: ${this.stats.aiDeaths}, partner deaths: ${this.stats.humanDeaths}.`,
-      this.coachPlan ? `Your previous plan: ${this.coachPlan}` : "",
-    ];
-    this.recent = [];
-    this.stats.actions.clear();
-    return lines.filter(Boolean).join("\n");
-  }
-
-  private async coachRound() {
-    if (this.stopped || !this.lastObs) return;
-    if (this.lastObs.phase !== "playing" && this.lastObs.phase !== "gameover") return;
-    if (this.coach.supportsVision) {
-      this.send({ type: "needShot" });
-      await new Promise((r) => setTimeout(r, 400));
-    }
-    const shot = this.pendingShot;
-    this.pendingShot = undefined;
-    this.stats.coachRounds++;
-    const advice = await this.coach.advise(this.summary(), this.lastObs, shot);
-    if (!advice || this.stopped) return;
-    this.coachIntent = advice.intent;
-    this.coachPlan = advice.plan;
-    this.op("coach", `${advice.intent}${advice.plan ? ` — ${advice.plan}` : ""} (${advice.latencyMs}ms)`);
-    if (advice.say) this.send({ type: "say", text: advice.say, at: Date.now() });
-    // A coach intent is a bias for a while, not forever.
-    setTimeout(() => {
-      if (this.coachIntent === advice.intent) this.coachIntent = "auto";
-    }, getConfig().ai.coachIntervalSeconds * 1000);
-  }
 
   stop() {
     this.stopped = true;
-    if (this.coachTimer) clearInterval(this.coachTimer);
-    this.coach.dispose();
-    log.info(`brain stopped: ticks=${this.stats.ticks} jev=${this.stats.jevCalls} coach=${this.stats.coachRounds} deaths=${this.stats.aiDeaths}/${this.stats.humanDeaths}`);
+    log.info(`brain stopped: ticks=${this.stats.ticks} jev=${this.stats.jevCalls} deaths=${this.stats.aiDeaths}/${this.stats.humanDeaths}`);
   }
 }

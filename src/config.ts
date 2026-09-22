@@ -40,8 +40,8 @@ export interface Config {
   romsDir: string;
   webDir: string;
   agentDir: string;
-  /** pi model specs (`provider/model[:thinking]`). coach = in-game strategist + commentator, chat = buyer conversations. */
-  llm: { coachModel: string; chatModel: string; thinking: string };
+  /** pi model spec (`provider/model[:thinking]`) for buyer conversations on Termix. */
+  llm: { chatModel: string; thinking: string };
   /** OpenAI-compatible relay: RELAY_BASE_URL + RELAY_API_KEY. Default OpenRouter (https://openrouter.ai/api). */
   relay: { baseUrl: string; apiKey: string };
   /**
@@ -55,10 +55,6 @@ export interface Config {
     observeHz: number;
     /** Max Jev requests per second per session (in-flight is capped at 1 anyway). */
     jevHz: number;
-    /** Seconds between coach (LLM) strategy/commentary rounds. */
-    coachIntervalSeconds: number;
-    /** Send a screenshot to the coach (vision models only). */
-    coachVision: boolean;
   };
   coins: {
     /** Coins minted per 1 unit of order currency (USD/USDC). */
@@ -104,7 +100,6 @@ export function getConfig(): Config {
     webDir: path.join(ROOT, "web"),
     agentDir: path.resolve(ROOT, env("PI_CODING_AGENT_DIR", path.join(dataDir, "pi-agent"))),
     llm: {
-      coachModel: env("PI_MODEL", "relay/google/gemini-2.5-flash-lite"),
       chatModel: env("PI_CHAT_MODEL", env("PI_MODEL", "relay/google/gemini-2.5-flash-lite")),
       thinking: env("PI_THINKING", "off"),
     },
@@ -121,8 +116,6 @@ export function getConfig(): Config {
     ai: {
       observeHz: envNum("AI_OBSERVE_HZ", 24),
       jevHz: envNum("AI_JEV_HZ", 8),
-      coachIntervalSeconds: envNum("AI_COACH_INTERVAL_SECONDS", 10),
-      coachVision: env("AI_COACH_VISION", "1") !== "0",
     },
     coins: {
       perDollar: envNum("COINS_PER_DOLLAR", 1),

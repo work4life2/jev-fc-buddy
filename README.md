@@ -3,7 +3,7 @@
 An **AI teammate for classic NES co-op games**, played in the browser and sold as coin codes on the
 [Termix](https://termix.ai) agent marketplace (agent.family).
 
-- Agent harness: [pi](https://pi.dev) (`@earendil-works/pi-coding-agent` SDK) — runs the in-game coach and the buyer chat through [OpenRouter](https://openrouter.ai) (any OpenAI-compatible relay works)
+- Agent harness: [pi](https://pi.dev) (`@earendil-works/pi-coding-agent` SDK) — runs the buyer chat through [OpenRouter](https://openrouter.ai) (any OpenAI-compatible relay works)
 - Decision model: [TypeSafe Jev](https://typesafe.ai) (System One) — typed, probability-backed action choices several times a second (`skills/typesafe-ai`). OpenRouter serves Jev on the same key through its System One endpoint (`/api/v1/systemone`, beta)
 - Marketplace: [termix-agent-skills](https://termix.ai/skills?v=1.8.0) v1.8.0 — hosting, orders, delivery, settlement (`skills/termix-agent-skills`, vendored unchanged)
 - Emulator: [jsnes](https://github.com/bfirsh/jsnes) in the player's browser; the server never streams video
@@ -22,8 +22,8 @@ player opens /?code=FC-…  ──▶ redeem ──▶ Insert coin (1 coin = one
         └─ server (one brain per session):
              reflex policy (every tick, code)      → keeps the buddy moving: follow / cover / shoot / dodge
              Jev (TypeSafe, ~4×/s, typed Choice)   → picks the action + "partner in danger?" / "jump now?" probabilities
-             coach (pi session on the relay, ~10 s) → plan + one line of commentary (screenshot included for vision models)
-           every controller change, Jev verdict and coach line is pushed to the right-hand danmaku stream
+           every controller change and Jev verdict is pushed to the browser: the PAD view lights the buttons on an
+           on-screen NES controller and floats each move up like a rhythm game; the LOG view is the plain text stream
 ```
 
 The AI normally holds controller 2, so on the title screen it presses SELECT until the game is in
@@ -41,10 +41,10 @@ threaten the base and firing positions within reach of it.
 ## Requirements
 
 - Node.js ≥ 22
-- An OpenRouter key (`RELAY_API_KEY`, relay `https://openrouter.ai/api`) — coach, buyer chat **and Jev**
+- An OpenRouter key (`RELAY_API_KEY`, relay `https://openrouter.ai/api`) — buyer chat **and Jev**
   (`jev-latest` → `~typesafe/jev-latest`, $0.042/M input). A direct TypeSafe account can be used
   instead by setting `TYPESAFE_API_KEY` + `TYPESAFE_BASE_URL=https://api.typesafe.ai`. Without any
-  key the buddy still plays on the reflex policy and the ops stream says "Jev offline"
+  key the buddy still plays on the reflex policy and the page says "Jev offline"
 - The game ROM(s) in `roms/` (not distributed)
 - Only for selling: a dedicated hot wallet (`WALLET_KEY`) with a little gas on the chosen chain
 
@@ -137,14 +137,16 @@ the server then redirects `/` there and serves only `/api/*`, `/ws` and the oper
 ## Models
 
 ```bash
-npm run model                        # show coach / chat / thinking / jev
+npm run model                        # show chat / thinking / jev
 npm run model -- list [filter]       # the relay's live catalog (relay/<id>)
-npm run model -- coach relay/google/gemini-3.1-flash-lite
+npm run model -- chat relay/google/gemini-3.1-flash-lite
 npm run model -- reset
 ```
 
-The coach needs a vision-capable model when `AI_COACH_VISION=1` (gemini / gpt / claude on the relay all
-are). Jev's model id is `TYPESAFE_MODEL` (default `jev-latest`).
+The only LLM in the loop is the buyer-chat model (it explains the service and answers support questions,
+nothing else). In-game decisions are Jev plus the reflex policy; there is no commentary model. Jev's model id
+is `TYPESAFE_MODEL` (default `jev-latest`). `node scripts/chat-dry-run.mjs` sends sample buyer messages
+through the real prompt and model without posting anything to Termix.
 
 ## Adding a game
 
@@ -153,7 +155,7 @@ Create `games/<id>/game.json` (see `games/contra/game.json` for a side-scroller 
 controller is the human's / the AI's, the RAM addresses for player positions, lives, state and the
 enemy table, how phases (title / loading / playing / game over) are recognised, the 2-player start
 procedure (`loadingStart` when a stage screen wants another START), reflex distances, and a short
-brief for the coach. Tank games add a `tank` block: the object table of tanks (with the sprite-id
+brief of the game (`coachBrief`, kept for Jev's context). Tank games add a `tank` block: the object table of tanks (with the sprite-id
 ranges that tell moving / standing / spawning / exploding apart), the shell table, the power-up
 bytes, the tile-map shadow with the tile ids per terrain, and the base cells. Drop the ROM into
 `roms/`. The doctor and the play page pick it up on restart. For RAM maps, disassemblies such as
@@ -171,8 +173,7 @@ src/ai/observe.ts      RAM bytes → game-agnostic observation (via the game pro
 src/ai/policy.ts       reflex policy (run-and-gun): intent → held buttons
 src/ai/tankPolicy.ts   reflex policy (tank): shells, lanes, path finding, base protection
 src/ai/jev.ts          TypeSafe Jev: typed Choice / Noul questions over the observation
-src/ai/coach.ts        pi session: plan + commentary
-src/ai/player.ts       the brain: reflex ⟷ Jev ⟷ coach, ops stream
+src/ai/player.ts       the brain: reflex ⟷ Jev, ops stream
 src/coins/store.ts     coin codes and play windows (data/coins.json) · src/runtimeConfig.ts runtime overrides (models, minutes per coin)
 src/termix/, src/hosting/, src/jobs/   marketplace: hosting loop, orders → codes → delivery, buyer chat
 games/<id>/game.json   game profiles          web/   play page (vanilla JS + jsnes)

@@ -29,11 +29,11 @@ export async function runDoctor(opts: { network?: boolean; termix?: boolean } = 
   add("games", games.length > 0, games.map((g) => `${g.id}${romAvailable(g) ? "" : " (ROM missing)"}`).join(", ") || "none in games/");
   for (const g of games) add(`rom: ${g.id}`, romAvailable(g), romAvailable(g) ? path.join(cfg.romsDir, g.rom) : `put ${g.rom} into ${cfg.romsDir}/`, false);
 
-  add("relay key", Boolean(cfg.relay.apiKey), cfg.relay.apiKey ? cfg.relay.baseUrl : "RELAY_API_KEY not set (.env.local) — coach commentary and buyer chat are off until it is", false);
+  add("relay key", Boolean(cfg.relay.apiKey), cfg.relay.apiKey ? cfg.relay.baseUrl : "RELAY_API_KEY not set (.env.local): Jev and buyer chat are off until it is", false);
   try {
     const rt = await modelRuntime();
     const models = getModels();
-    for (const [label, spec] of [["coach model", models.coachModel], ["chat model", models.chatModel]] as const) {
+    for (const [label, spec] of [["chat model", models.chatModel]] as const) {
       const { model } = await resolveModel(spec);
       // pi answers {type:"api_key", source:"…"} when credentials are configured, an error field otherwise.
       const auth = (await rt.checkAuth(model.provider).catch(() => undefined)) as { type?: string; source?: string; error?: string; available?: boolean } | boolean | undefined;
@@ -49,7 +49,7 @@ export async function runDoctor(opts: { network?: boolean; termix?: boolean } = 
     const p = opts.network === false ? { ok: true, model: "(not probed)" } : await jevPing();
     add("jev (System One)", p.ok, p.ok ? `${cfg.typesafe.model} → ${p.model} (${jevWhere})` : `${jevWhere} rejected: ${p.error?.slice(0, 160)}`, false);
   } else {
-    add("jev (System One)", false, "no key — set RELAY_API_KEY (OpenRouter serves Jev) or TYPESAFE_API_KEY; the buddy plays on reflex + coach only", false);
+    add("jev (System One)", false, "no key — set RELAY_API_KEY (OpenRouter serves Jev) or TYPESAFE_API_KEY; the buddy plays on the reflex policy only", false);
   }
 
   if (opts.termix !== false && opts.network !== false) {

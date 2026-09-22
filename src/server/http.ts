@@ -150,7 +150,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
   const cfg = getConfig();
   const p = url.pathname;
   if (req.method === "GET" && p === "/api/health") {
-    json(res, 200, { ok: true, games: playableGames().map((g) => g.id), jev: jevEnabled(), coach: getModels().coachModel, sessions: [...sessions.values()].filter((s) => !s.ended).length });
+    json(res, 200, { ok: true, games: playableGames().map((g) => g.id), jev: jevEnabled(), sessions: [...sessions.values()].filter((s) => !s.ended).length });
     return;
   }
   if (req.method === "GET" && p === "/api/games") {
@@ -242,7 +242,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
         now: new Date(now).toISOString(),
         spend: await relaySpend(),
         settings: { sessionMinutes: getSessionMinutes(), defaultSessionMinutes: cfg.coins.sessionMinutes, coinsPerDollar: cfg.coins.perDollar, price: cfg.service.price, currency: cfg.service.currency },
-        models: { coach: getModels().coachModel, chat: getModels().chatModel, jev: jevEnabled() ? cfg.typesafe.model : null, relay: cfg.relay.baseUrl },
+        models: { chat: getModels().chatModel, jev: jevEnabled() ? cfg.typesafe.model : null, relay: cfg.relay.baseUrl },
         games: playableGames().map((g) => g.id),
         hosting: { enabled: Boolean(cfg.termix.agentId && cfg.termix.hasWalletKey), agentId: cfg.termix.agentId || null, chain: cfg.termix.chain },
         urls: { api: cfg.http.publicBaseUrl, play: cfg.http.playBaseUrl },
@@ -306,9 +306,9 @@ function attachWs(s: PlaySession, ws: WebSocket): void {
   };
   send({ type: "session", ...sessionPublic(s) });
   s.brain?.stop();
-  s.brain = new BuddyBrain({ game: s.game, lang: s.lang, send });
+  s.brain = new BuddyBrain({ game: s.game, send });
   ws.on("message", (raw) => {
-    let msg: { type?: string; ram?: string; jpeg?: string; lang?: string };
+    let msg: { type?: string; ram?: string; lang?: string };
     try {
       msg = JSON.parse(raw.toString()) as typeof msg;
     } catch {
@@ -318,9 +318,6 @@ function attachWs(s: PlaySession, ws: WebSocket): void {
     switch (msg.type) {
       case "obs":
         if (msg.ram) s.brain?.onObservation(Buffer.from(msg.ram, "base64"));
-        break;
-      case "shot":
-        if (msg.jpeg) s.brain?.onScreenshot(msg.jpeg);
         break;
       case "hello":
         if (msg.lang) s.lang = msg.lang;

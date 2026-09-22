@@ -3,7 +3,7 @@ import type { EnemyObs, Observation } from "./observe.js";
 import type { JevAction } from "./jev.js";
 
 /**
- * The reflex policy: turns an intent (from Jev, the coach, or its own heuristics) plus the current
+ * The reflex policy: turns an intent (from Jev or its own heuristics) plus the current
  * observation into a set of held buttons for the AI's controller. Runs on every tick with zero
  * latency, so the buddy keeps moving sensibly between model answers.
  *
@@ -136,7 +136,7 @@ export function respawnSteer(game: GameProfile, obs: Observation, mem: PolicyMem
 }
 
 /**
- * Hard survival rules. Returns undefined when nothing is urgent. These override Jev and the coach
+ * Hard survival rules. Returns undefined when nothing is urgent. These override Jev
  * because a 250 ms model round trip is too slow for a bullet 40 px away.
  */
 export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyMemory, now: number): { intent: Intent; why: string } | undefined {

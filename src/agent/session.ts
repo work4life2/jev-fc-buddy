@@ -18,10 +18,8 @@ const log = logger("pi");
 
 /**
  * pi (https://pi.dev) is the agent harness. This module registers the relay's models as a pi
- * provider, resolves model specs, and builds two kinds of sessions:
- *   - coach: tools-free, JSON-only strategist/commentator that watches the game
- *   - chat : tools-free buyer-conversation drafter for Termix
- * Both go through the relay (RELAY_BASE_URL / RELAY_API_KEY), like 3dcardagent.
+ * provider, resolves model specs, and builds the tools-free buyer-conversation session for Termix.
+ * It goes through the relay (RELAY_BASE_URL / RELAY_API_KEY), like 3dcardagent.
  */
 
 function readModelsJson(file: string): { providers?: Record<string, unknown> } {
@@ -62,7 +60,7 @@ export function writeRelayModelsJson(catalog: RelayCatalog | undefined): { ids: 
   });
   const wanted = new Set<string>();
   const current = getModels();
-  for (const spec of [current.coachModel, current.chatModel]) {
+  for (const spec of [current.chatModel]) {
     const [provider, ...rest] = spec.split("/");
     if (provider === RELAY_PROVIDER && rest.length) wanted.add(rest.join("/").split(":")[0]);
   }
@@ -143,11 +141,11 @@ export function skillFrom(dir: string, source: string): Skill {
 
 export type TextSession = Awaited<ReturnType<typeof createTextSession>>;
 
-/** A tools-free pi session with a fixed system prompt (coach or buyer chat). */
-export async function createTextSession(kind: "coach" | "chat", systemPrompt: string, opts: { thinking?: string } = {}) {
+/** A tools-free pi session with a fixed system prompt (buyer chat). */
+export async function createTextSession(kind: "chat", systemPrompt: string, opts: { thinking?: string } = {}) {
   const cfg = getConfig();
   const models = getModels();
-  const spec = kind === "coach" ? models.coachModel : models.chatModel;
+  const spec = models.chatModel;
   const { model, thinkingLevel } = await resolveModel(spec);
   const settingsManager = SettingsManager.inMemory({ compaction: { enabled: true }, retry: { enabled: true, maxRetries: 2 } });
   const loader = new DefaultResourceLoader({

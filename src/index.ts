@@ -15,7 +15,7 @@ Usage:
   jev-fc-buddy code mint <coins> [note]   mint a coin code locally (testing / manual sales); prints the play URL
   jev-fc-buddy code list              list codes and their balances
   jev-fc-buddy setup [agents|mint <name> "<display name>"|listing [cover.png] [--update <listingId>]]
-  jev-fc-buddy model [show|list [filter] [--refresh]|coach <id>|chat <id>|thinking <lvl>|reset]
+  jev-fc-buddy model [show|list [filter] [--refresh]|chat <id>|thinking <lvl>|reset]
   jev-fc-buddy doctor [--no-network]  check environment and configuration
   jev-fc-buddy jobs                   list Termix orders handled
   jev-fc-buddy pi [args...]           interactive pi with the termix + typesafe skills loaded
@@ -98,10 +98,10 @@ async function main() {
     case "model": {
       const { getModels, setModel, resetModels, MODEL_KEYS } = await import("./runtimeConfig.js");
       const sub = rest[0] ?? "show";
-      const map: Record<string, (typeof MODEL_KEYS)[number]> = { coach: "coachModel", chat: "chatModel", thinking: "thinking" };
+      const map: Record<string, (typeof MODEL_KEYS)[number]> = { chat: "chatModel", thinking: "thinking" };
       if (sub === "show") {
         const m = getModels();
-        process.stdout.write(`coach    ${m.coachModel}${m.overrides.coachModel ? "" : "  (env default)"}\nchat     ${m.chatModel}${m.overrides.chatModel ? "" : "  (env default)"}\nthinking ${m.thinking}${m.overrides.thinking ? "" : "  (env default)"}\njev      ${cfg.typesafe.model} (${cfg.typesafe.apiKey ? "TypeSafe key set" : "no TYPESAFE_API_KEY"})\n`);
+        process.stdout.write(`chat     ${m.chatModel}${m.overrides.chatModel ? "" : "  (env default)"}\nthinking ${m.thinking}${m.overrides.thinking ? "" : "  (env default)"}\njev      ${cfg.typesafe.model} (${cfg.typesafe.apiKey ? "TypeSafe key set" : "no TYPESAFE_API_KEY"})\n`);
       } else if (sub === "reset") {
         resetModels();
         process.stdout.write("Reset to the .env defaults\n");

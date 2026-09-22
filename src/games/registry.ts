@@ -8,7 +8,7 @@ const log = logger("games");
 /**
  * A game is a folder under games/<id>/ with a game.json profile. The profile describes where the
  * ROM is, which RAM addresses carry the observable state, how to start a 2-player game, and what to
- * tell the coach model about the game. Nothing outside games/ is specific to any single title.
+ * describe the game. Nothing outside games/ is specific to any single title.
  */
 export type EnemyCategory = "hostile" | "projectile" | "item" | "obstacle" | "hazard" | "ignore";
 

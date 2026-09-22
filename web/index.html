@@ -3,70 +3,117 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jev FC Buddy · AI co-op for classic games</title>
+<title>Jev FC Buddy · AI co-op for classic NES games</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Press+Start+2P&family=VT323&display=swap">
 <link rel="stylesheet" href="/style.css">
 <!-- Optional: sets window.JEV_API_BASE when this page is hosted away from the server (see web/config.js). -->
 <script src="/config.js"></script>
 </head>
 <body>
+<div class="bg-grid" aria-hidden="true"></div>
+
 <header class="top">
-  <div class="brand"><span class="dot"></span> JEV FC BUDDY <span class="sub">AI co-op · 1P you · 2P AI</span></div>
+  <div class="brand"><span class="coin" aria-hidden="true"></span><span class="brandName">JEV FC BUDDY</span><span class="sub">AI CO-OP · 1P YOU · 2P AI</span></div>
   <div class="hud" id="hud" hidden>
-    <span id="hudGame"></span>
-    <span id="hudTime" title="time left on this coin"></span>
+    <span id="hudGame" class="hudGame"></span>
+    <span id="hudTime" class="hudTime" title="time left on this coin">⏱ --:--</span>
     <span id="hudCoins" title="coins left on your code"></span>
-    <span id="hudJev" title="Jev = TypeSafe System One model">Jev …</span>
-    <span id="hudPad">⌨️ keyboard</span>
-    <button id="btnMap" class="ghost" title="gamepad button mapping">🎮 Map</button>
+    <span id="hudJev" title="Jev = TypeSafe System One model">JEV …</span>
+    <span id="hudPad">⌨ KEYBOARD</span>
+    <button id="btnMap" class="ghost" title="gamepad button mapping">🎮 MAP</button>
     <button id="btnMute" class="ghost" title="mute">🔊</button>
-    <button id="btnQuit" class="ghost" title="end session">✕</button>
+    <button id="btnQuit" class="ghost" title="pause and leave">✕</button>
   </div>
 </header>
 
 <main id="gate" class="gate">
-  <div class="card">
-    <h1>Insert your coin code</h1>
-    <p class="muted">Bought coins on Termix? Your code arrived with the order. One coin buys a timed play window; leave and come back any time while the clock runs.</p>
-    <form id="redeemForm">
-      <input id="codeInput" placeholder="FC-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false">
-      <button id="btnRedeem">Redeem</button>
-    </form>
-    <div id="redeemResult" class="result" hidden></div>
-    <div id="gamePick" hidden>
-      <h2>Pick a game</h2>
-      <div id="games" class="games"></div>
-      <button id="btnStart" class="primary" disabled>Insert coin ▶</button>
-      <p class="muted small">You are player 1: <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> move, <kbd>J</kbd> fire, <kbd>K</kbd> jump, <kbd>Enter</kbd> start, <kbd>Shift</kbd> select. Or plug in any gamepad (<button id="btnMapGate" class="link" type="button">map its buttons</button>, saved in this browser). The AI takes the other controller and starts the 2-player game for you (which side you are on is shown when the game loads).</p>
+  <section class="cabinet">
+    <div class="marquee"><span class="marqueeText">INSERT COIN</span></div>
+    <div class="cabinetBody">
+      <h1 class="pixel">READY PLAYER 1?</h1>
+      <p class="lead">Your AI teammate is waiting on controller 2. Enter the coin code from your Termix order to start.</p>
+      <form id="redeemForm" class="redeemForm">
+        <input id="codeInput" placeholder="FC-XXXX-XXXX-XXXX" autocomplete="off" spellcheck="false" aria-label="coin code">
+        <button id="btnRedeem" class="primary pixel">REDEEM</button>
+      </form>
+      <div id="redeemResult" class="result" hidden></div>
+      <div id="gamePick" hidden>
+        <h2 class="pixel">SELECT GAME</h2>
+        <div id="games" class="games"></div>
+        <button id="btnStart" class="primary pixel big" disabled>INSERT COIN ▶</button>
+        <div class="controlsHint">
+          <div class="hintRow"><span class="hintLabel">MOVE</span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span class="or">or arrows</span></div>
+          <div class="hintRow"><span class="hintLabel">FIRE</span><kbd>J</kbd><span class="or">or</span><kbd>Z</kbd><span class="hintLabel">JUMP</span><kbd>K</kbd><span class="or">or</span><kbd>X</kbd></div>
+          <div class="hintRow"><span class="hintLabel">START</span><kbd>Enter</kbd><span class="hintLabel">SELECT</span><kbd>Shift</kbd></div>
+          <p class="muted small">Any gamepad works too (<button id="btnMapGate" class="link" type="button">map its buttons</button>, saved in this browser). The AI takes the other controller, picks 2-player mode and presses Start for you. One coin runs a timed clock; leave and come back with the same code while it runs.</p>
+        </div>
+      </div>
+      <p id="gateError" class="error pixel" hidden></p>
     </div>
-    <p id="gateError" class="error" hidden></p>
-  </div>
+    <div class="cabinetFoot"><span>NO INSTALL</span><span>·</span><span>DESKTOP BROWSER</span><span>·</span><span>2P CO-OP</span></div>
+  </section>
 </main>
 
 <main id="play" class="play" hidden>
   <section class="screen">
-    <div class="frame">
-      <canvas id="screen" width="256" height="240"></canvas>
-      <div id="flyLayer" class="fly"></div>
-      <div id="overlay" class="overlay" hidden>
-        <div class="overlayBox">
-          <h2 id="overlayTitle">Time's up</h2>
-          <p id="overlayText"></p>
-          <button id="btnAgain" class="primary">Insert another coin ▶</button>
-          <button id="btnBack" class="ghost">Back</button>
+    <div class="crt">
+      <div class="frame">
+        <canvas id="screen" width="256" height="240"></canvas>
+        <div class="scanlines" aria-hidden="true"></div>
+        <div id="overlay" class="overlay" hidden>
+          <div class="overlayBox">
+            <h2 id="overlayTitle" class="pixel">TIME'S UP</h2>
+            <p id="overlayText"></p>
+            <button id="btnAgain" class="primary pixel">INSERT COIN ▶</button>
+            <button id="btnBack" class="ghost pixel">BACK</button>
+          </div>
         </div>
       </div>
     </div>
-    <div class="legend"><span class="tag jev">Jev</span> split-second decision · <span class="tag coach">coach</span> strategy &amp; banter · <span class="tag reflex">reflex</span> built-in policy · <span class="tag macro">macro</span> menu inputs</div>
+    <div class="legend"><span class="tag jev">JEV</span> split-second decision · <span class="tag reflex">REFLEX</span> built-in policy · <span class="tag macro">MACRO</span> menu inputs</div>
   </section>
-  <aside class="stream">
-    <div class="streamHead">AI ops stream <span id="streamCount" class="muted"></span></div>
-    <div id="danmaku" class="danmaku"></div>
+
+  <aside class="side">
+    <div class="sideHead">
+      <span class="sideTitle pixel">PLAYER 2 · AI</span>
+      <div class="seg" role="tablist" aria-label="view">
+        <button id="viewPad" class="segBtn on" role="tab" aria-selected="true">PAD</button>
+        <button id="viewLog" class="segBtn" role="tab" aria-selected="false">LOG</button>
+      </div>
+    </div>
+
+    <div id="padView" class="padView">
+      <div id="lane" class="lane" aria-live="off"></div>
+      <div class="controller" id="controller" aria-label="AI controller">
+        <div class="ctrlBody">
+          <div class="dpad">
+            <span class="dbtn up" data-b="UP"></span>
+            <span class="dbtn down" data-b="DOWN"></span>
+            <span class="dbtn left" data-b="LEFT"></span>
+            <span class="dbtn right" data-b="RIGHT"></span>
+            <span class="dcenter"></span>
+          </div>
+          <div class="ctrlLabel pixel">Nintendo<span class="ctrlSub">JEV BUDDY · P2</span></div>
+          <div class="mid"><span class="pill"></span><span class="pill"></span></div>
+          <div class="ab">
+            <span class="abtn" data-b="B"><i></i><b>B</b></span>
+            <span class="abtn" data-b="A"><i></i><b>A</b></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div id="logView" class="logView" hidden>
+      <div id="danmaku" class="danmaku"></div>
+      <div class="logFoot"><span id="streamCount" class="muted"></span></div>
+    </div>
   </aside>
 </main>
 
 <div id="mapPanel" class="modal" hidden>
   <div class="modalBox">
-    <h2>Gamepad mapping</h2>
+    <h2 class="pixel">GAMEPAD MAPPING</h2>
     <p id="mapPad" class="muted small"></p>
     <div id="mapRows" class="mapRows"></div>
     <p class="muted small">Click <b>Set</b>, then press the button (or push the stick) you want for that action. Saved per gamepad in this browser.</p>

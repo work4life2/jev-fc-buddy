@@ -8,16 +8,14 @@ import { getConfig } from "./config.js";
  * session and every new coin window reads them fresh.
  */
 export interface ModelSettings {
-  /** pi model for the in-game coach (strategy + commentary), e.g. relay/gemini-2.5-flash-lite */
-  coachModel: string;
-  /** pi model for buyer chat replies on Termix */
+  /** pi model for buyer chat replies on Termix, e.g. relay/google/gemini-2.5-flash-lite */
   chatModel: string;
   /** off | minimal | low | medium | high */
   thinking: string;
 }
 
 export type ModelKey = keyof ModelSettings;
-export const MODEL_KEYS: ModelKey[] = ["coachModel", "chatModel", "thinking"];
+export const MODEL_KEYS: ModelKey[] = ["chatModel", "thinking"];
 
 interface Overrides extends Partial<ModelSettings> {
   /** Minutes of play one coin buys (operator dashboard). */
@@ -44,13 +42,12 @@ function writeOverrides(o: Overrides): void {
 export function getModels(): ModelSettings & { overrides: Partial<ModelSettings>; defaults: ModelSettings } {
   const cfg = getConfig();
   const o = readOverrides();
-  const defaults: ModelSettings = { coachModel: cfg.llm.coachModel, chatModel: cfg.llm.chatModel, thinking: cfg.llm.thinking };
+  const defaults: ModelSettings = { chatModel: cfg.llm.chatModel, thinking: cfg.llm.thinking };
   return {
     defaults,
-    coachModel: o.coachModel || defaults.coachModel,
     chatModel: o.chatModel || defaults.chatModel,
     thinking: o.thinking || defaults.thinking,
-    overrides: { coachModel: o.coachModel, chatModel: o.chatModel, thinking: o.thinking },
+    overrides: { chatModel: o.chatModel, thinking: o.thinking },
   };
 }
 

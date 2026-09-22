@@ -15,7 +15,7 @@ import type { Action, Button } from "./policy.js";
  *   4. attack   — walk (BFS) to the nearest position with an open lane onto an enemy and fire;
  *   5. collect  — power-ups when nothing is shooting at us;
  *   6. otherwise hold a post between the enemies and the base.
- * The strategic intent (Jev / coach) only re-weights step 4 and 5; steps 1-3 always win.
+ * The strategic intent (Jev) only re-weights step 4 and 5; steps 1-3 always win.
  */
 
 export type TankIntent = "engage" | "defend_base" | "hold_fire" | "evade" | "collect_item" | "support_partner";
@@ -503,7 +503,7 @@ function driveTo(ctx: Ctx, b: Bfs, x: number, y: number, reason: string): Action
   return move(ctx, d, reason, opportunistic && !ctx.shellOut);
 }
 
-/** Main entry: the action for this tick. `intent` is the strategic bias from Jev / the coach. */
+/** Main entry: the action for this tick. `intent` is the strategic bias from Jev. */
 export function tankDecide(game: GameProfile, obs: Observation, mem: TankMemory, now: number, intent: TankIntent | "auto"): Action & { urgent: boolean } {
   const w = obs.tank!;
   const t = game.tank!;
@@ -624,7 +624,7 @@ export function tankDebug(game: GameProfile, obs: Observation, mem: TankMemory):
   return lines.join("\n");
 }
 
-/** Compact arena summary for Jev / the coach. */
+/** Compact arena summary for Jev. */
 export function tankSummary(obs: Observation, game: GameProfile): Record<string, unknown> {
   const w = obs.tank!;
   const t = game.tank!;

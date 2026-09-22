@@ -5,7 +5,7 @@ const log = logger("spend");
 
 /**
  * What the relay key has spent, straight from OpenRouter's key endpoint (USD). Every model call
- * this service makes (coach, buyer chat and Jev via System One) is billed to that key, so this is
+ * this service makes (buyer chat and Jev via System One) is billed to that key, so this is
  * the authoritative running cost. Cached for a minute; other relays just report "unavailable".
  */
 export interface RelaySpend {

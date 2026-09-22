@@ -55,7 +55,7 @@ Buy coins, get a code, open the play link, insert a coin: you are player 1 (keyb
 • Games right now: ${games || "coming soon"} — more titles are added over time
 • ${cfg.coins.perDollar} coin per ${cfg.service.currency}; 1 coin = ${getSessionMinutes()} minutes of play (leave and come back any time while the clock runs); buy N ${cfg.service.currency} to get N coins on one code
 • Delivered automatically within minutes of funding: the code and the play link are posted in the order
-• Powered by TypeSafe's Jev model for split-second decisions and an LLM coach for strategy and banter
+• Powered by TypeSafe's Jev model for split-second decisions on top of a built-in reflex policy; every move it makes lights up an on-screen controller
 Nothing to install. Desktop browser recommended.`;
 }
 

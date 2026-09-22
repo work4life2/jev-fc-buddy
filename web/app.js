@@ -41,7 +41,9 @@
       };
       box.appendChild(el);
     }
-    if (games.length === 1) box.firstChild.click();
+    const wanted = [...box.children].find((c) => c.dataset.id === params.get("game")); // testing aid: ?game=<id>
+    if (wanted) wanted.click();
+    else if (games.length === 1) box.firstChild.click();
   }
 
   $("redeemForm").onsubmit = async (e) => {
@@ -58,7 +60,7 @@
         : `${r.code} · ${r.remaining} of ${r.coins} coin${r.coins > 1 ? "s" : ""} left · ${r.sessionMinutes} min of play per coin`;
       await loadGames();
       $("gamePick").hidden = false;
-      $("btnStart").textContent = r.active ? "Resume \u25B6" : "Insert coin \u25B6";
+      $("btnStart").textContent = r.active ? "RESUME \u25B6" : "INSERT COIN \u25B6";
       if (r.active) {
         const el = [...$("games").children].find((c) => c.dataset.id === r.active.gameId);
         if (el) el.click();
@@ -75,8 +77,9 @@
   $("btnStart").onclick = () => startSession();
   $("btnAgain").onclick = () => startSession();
   $("btnBack").onclick = () => location.href = `${location.pathname}?code=${encodeURIComponent(state.code || "")}`;
-  $("btnQuit").onclick = () => { if (state.ws) state.ws.send(JSON.stringify({ type: "quit" })); showOverlay("Session paused", "Your clock keeps running until the coin's time is up. Come back with the same code to continue."); };
+  $("btnQuit").onclick = () => { if (state.ws) state.ws.send(JSON.stringify({ type: "quit" })); showOverlay("PAUSED", "Your clock keeps running until the coin's time is up. Come back with the same code to continue."); };
   $("btnMute").onclick = () => { state.muted = !state.muted; $("btnMute").textContent = state.muted ? "🔇" : "🔊"; };
+  $("btnAgain").addEventListener("click", () => { for (const b of Object.values(padEls)) b.classList.remove("lit", "turbo"); });
 
   // Gamepad detection on the gate page too, so the mapping can be set before the first coin.
   window.addEventListener("gamepadconnected", (e) => { if (!state.nes) onPad(e.gamepad); });
@@ -101,7 +104,7 @@
     } catch (err) {
       $("gateError").hidden = false;
       $("gateError").textContent = err.message;
-      if ($("play").hidden === false) showOverlay("No coins left", err.message);
+      if ($("play").hidden === false) showOverlay("NO COINS LEFT", err.message);
     }
   }
 
@@ -133,9 +136,9 @@
         $("hudCoins").textContent = `🪙 ${m.remaining} left`;
         break;
       case "status":
-        $("hudJev").textContent = m.jev ? "Jev ● online" : "Jev ○ offline";
+        $("hudJev").textContent = m.jev ? "JEV ● ONLINE" : "JEV ○ OFFLINE";
         $("hudJev").className = m.jev ? "on" : "";
-        $("hudJev").title = `coach: ${m.coach} · phase: ${m.phase}`;
+        $("hudJev").title = `phase: ${m.phase}`;
         break;
       case "act":
         if (m.controller && m.controller !== aiController) {
@@ -146,28 +149,78 @@
         aiHeld.clear(); aiTurbo.clear();
         for (const b of m.hold) aiHeld.add(BTN[b]);
         for (const b of m.turbo) aiTurbo.add(BTN[b]);
+        padShow(m);
         break;
       case "op":
         pushOp(m.src, m.text, m.detail ? Object.values(m.detail).filter((v) => typeof v === "string").join(" ") : "");
         break;
-      case "say":
-        pushSay(m.text);
-        fly(m.text);
-        break;
-      case "needShot":
-        ws_send({ type: "shot", jpeg: $("screen").toDataURL("image/jpeg", 0.6).split(",")[1] });
-        break;
       case "expired":
         aiHeld.clear(); aiTurbo.clear();
-        if (m.reason === "time is up") { state.expiresAt = 0; showOverlay("Time's up \u23F1", "This coin is spent. Insert another coin to keep playing: the game stays exactly where it is."); }
-        else if (m.reason === "resumed in another tab") showOverlay("Taken over", "This code was just used in another tab or browser. Only one session per coin can run at a time.");
-        else showOverlay("Session paused", m.reason);
+        for (const b of Object.values(padEls)) b.classList.remove("lit", "turbo");
+        if (m.reason === "time is up") { state.expiresAt = 0; showOverlay("TIME'S UP", "This coin is spent. Insert another coin to keep playing: the game stays exactly where it is."); }
+        else if (m.reason === "resumed in another tab") showOverlay("TAKEN OVER", "This code was just used in another tab or browser. Only one session per coin can run at a time.");
+        else showOverlay("PAUSED", m.reason);
         break;
     }
   }
   function ws_send(o) { if (state.ws && state.ws.readyState === 1) state.ws.send(JSON.stringify(o)); }
 
-  // ───────────────────────── danmaku ─────────────────────────
+  // ───────────────────────── side panel: PAD (controller + rising moves) or LOG (text) ─────────────────────────
+  const VIEW_KEY = "fcbuddy.view";
+  function setView(v) {
+    const pad = v !== "log";
+    $("padView").hidden = !pad;
+    $("logView").hidden = pad;
+    $("viewPad").classList.toggle("on", pad);
+    $("viewLog").classList.toggle("on", !pad);
+    $("viewPad").setAttribute("aria-selected", String(pad));
+    $("viewLog").setAttribute("aria-selected", String(!pad));
+    localStorage.setItem(VIEW_KEY, pad ? "pad" : "log");
+  }
+  $("viewPad").onclick = () => setView("pad");
+  $("viewLog").onclick = () => setView("log");
+  setView(localStorage.getItem(VIEW_KEY) || "pad");
+
+  // Only the AI's own controller and only UP/DOWN/LEFT/RIGHT/A/B are shown (menu taps on the other controller are not).
+  const PAD_SHOWN = ["UP", "DOWN", "LEFT", "RIGHT", "A", "B"];
+  const ARROW = { UP: "▲", DOWN: "▼", LEFT: "◀", RIGHT: "▶" };
+  const padEls = {};
+  for (const el of document.querySelectorAll("#controller [data-b]")) padEls[el.dataset.b] = el;
+  let lastNoteKey = "";
+  let lastNoteAt = 0;
+  function padShow(m) {
+    const aiPad = state.session ? state.session.game.players.ai : 2;
+    if (m.controller && m.controller !== aiPad) return;
+    const hold = (m.hold || []).filter((b) => PAD_SHOWN.includes(b));
+    const turbo = (m.turbo || []).filter((b) => PAD_SHOWN.includes(b));
+    for (const b of PAD_SHOWN) {
+      const el = padEls[b];
+      if (!el) continue;
+      el.classList.toggle("lit", hold.includes(b) || turbo.includes(b));
+      el.classList.toggle("turbo", turbo.includes(b));
+    }
+    if (!hold.length && !turbo.length) return; // a release is not a move
+    if ($("padView").hidden) return;
+    const key = hold.join(",") + "|" + turbo.join(",");
+    const now = performance.now();
+    if (key === lastNoteKey && now - lastNoteAt < 250) return; // debounce jitter between identical acts
+    lastNoteKey = key; lastNoteAt = now;
+    const lane = $("lane");
+    const parts = [];
+    for (const b of ["UP", "DOWN", "LEFT", "RIGHT"]) if (hold.includes(b) || turbo.includes(b)) parts.push(`<span class="arrow">${ARROW[b]}</span>`);
+    for (const b of ["B", "A"]) if (hold.includes(b) || turbo.includes(b)) parts.push(`<span class="btn${turbo.includes(b) ? " turbo" : ""}">${b}</span>`);
+    const why = m.src === "jev" ? "JEV" : m.src === "reflex" ? "REFLEX" : (m.src || "").toUpperCase();
+    const el = document.createElement("div");
+    el.className = `note ${m.src || ""}`;
+    el.innerHTML = parts.join('<span class="plus">+</span>') + (why ? `<span class="why">${why}</span>` : "");
+    el.style.setProperty("--dx", `${Math.round((Math.random() - 0.5) * 120)}px`);
+    el.style.setProperty("--h", `${Math.max(120, lane.clientHeight - 20)}px`);
+    lane.appendChild(el);
+    while (lane.children.length > 24) lane.removeChild(lane.firstChild);
+    setTimeout(() => el.remove(), 2700);
+  }
+
+  // ───────────────────────── log view ─────────────────────────
   let opCount = 0;
   function stamp() { const d = new Date(); return d.toTimeString().slice(3, 8) + "." + String(d.getMilliseconds()).padStart(3, "0").slice(0, 1); }
   function pushOp(src, text, extra) {
@@ -178,23 +231,6 @@
     box.appendChild(el);
     while (box.children.length > 80) box.removeChild(box.firstChild);
     $("streamCount").textContent = `· ${++opCount}`;
-  }
-  function pushSay(text) {
-    const box = $("danmaku");
-    const el = document.createElement("div");
-    el.className = "d say";
-    el.innerHTML = `💬 ${escapeHtml(text)}<span class="t">${stamp()}</span>`;
-    box.appendChild(el);
-    while (box.children.length > 80) box.removeChild(box.firstChild);
-  }
-  function fly(text) {
-    const layer = $("flyLayer");
-    const el = document.createElement("div");
-    el.className = "f";
-    el.textContent = text;
-    el.style.top = `${8 + Math.random() * 60}%`;
-    layer.appendChild(el);
-    setTimeout(() => el.remove(), 9500);
   }
   function escapeHtml(s) { return String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]); }
 
@@ -312,7 +348,7 @@
     window.addEventListener("keydown", (e) => { if (e.code in KEYS && !mapping.capturing) { state.nes.buttonDown(c, KEYS[e.code]); e.preventDefault(); } });
     window.addEventListener("keyup", (e) => { if (e.code in KEYS) { state.nes.buttonUp(c, KEYS[e.code]); e.preventDefault(); } });
     window.addEventListener("gamepadconnected", (e) => onPad(e.gamepad));
-    window.addEventListener("gamepaddisconnected", () => { state.padIndex = null; $("hudPad").textContent = "⌨️ keyboard"; });
+    window.addEventListener("gamepaddisconnected", () => { state.padIndex = null; $("hudPad").textContent = "⌨ KEYBOARD"; });
     // Some browsers only surface an already-plugged pad once it is polled.
     const gps = navigator.getGamepads ? navigator.getGamepads() : [];
     for (const gp of gps) if (gp) onPad(gp);
@@ -321,7 +357,7 @@
     state.padIndex = gp.index;
     state.padId = gp.id;
     mapping.current = loadMapping(gp.id);
-    $("hudPad").textContent = `🎮 ${gp.id.slice(0, 22)}`;
+    $("hudPad").textContent = `🎮 ${gp.id.slice(0, 18).toUpperCase()}`;
     $("btnMap").hidden = false;
     pushOp("system", "gamepad connected", `${gp.id.slice(0, 40)}${mapping.current.custom ? " · custom mapping" : " · standard mapping"}`);
   }

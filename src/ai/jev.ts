@@ -15,7 +15,7 @@ const log = logger("jev");
  *
  * Jev is not a chat model: it is reached through TypeSafe's System One API, which OpenRouter mirrors
  * at <relay>/v1/systemone on the same key (bare ids like `jev-latest` map to `~typesafe/jev-latest`).
- * Without any key the buddy still plays on the reflex policy + coach, and the ops stream says so.
+ * Without any key the buddy still plays on the reflex policy, and the ops stream says so.
  */
 
 export const JEV_ACTIONS = {
@@ -32,7 +32,7 @@ export const JEV_ACTIONS = {
 /** Either action set: the run-and-gun moves or the tank intents (see tankPolicy.ts). */
 export type JevAction = keyof typeof JEV_ACTIONS | TankIntent;
 
-/** The action set Jev and the coach choose from for a game. */
+/** The action set Jev chooses from for a game. */
 export function actionsFor(game: GameProfile): Record<string, string> {
   return genreOf(game) === "tank" ? TANK_INTENTS : JEV_ACTIONS;
 }
