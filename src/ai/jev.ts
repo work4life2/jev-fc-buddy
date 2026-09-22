@@ -74,6 +74,8 @@ export interface JevExtra {
   edge?: EdgeInfo;
   /** Learned kill zones near the buddy, already relative to it. */
   dangers?: Array<{ from_px: number; to_px: number; note: string }>;
+  /** Per-action descriptions computed for this very state (src/ai/criteria.ts); the static set otherwise. */
+  criteria?: Record<keyof typeof JEV_ACTIONS, string>;
 }
 
 /** Learned kill zones within reach of the buddy, as relative distances plus the lesson. */
@@ -203,7 +205,7 @@ export async function jevDecide(game: GameProfile, obs: Observation, extra: JevE
               "Items are good: a weapon item within reach and no hostile nearby → move toward it (advance_fire if ahead, retreat if behind).",
             ],
           },
-          JEV_ACTIONS as Record<JevAction, string>,
+          (extra.criteria ?? JEV_ACTIONS) as Record<JevAction, string>,
         ),
         partner_in_danger: noul("Is a hostile within 40px of the partner, or is the partner about to be overrun?"),
         jump_now: noul("Is a LOW, level-flying projectile about to reach the buddy's feet (and no other projectile is in the air nearby), so that jumping right now is the way to survive?"),

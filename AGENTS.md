@@ -13,8 +13,10 @@ coin codes on the Termix agent marketplace.
   procedure, reflex parameters, game brief. Nothing outside `games/` may mention a specific title.
   `games/<id>/learned.json` is written by `node dist/index.js train run --rounds N` (self-play in a
   headless jsnes, see README → Self-play training): pits, kill zones, platforms, failed jumps. It is
-  committed and deploys with the code; rerun training after changing `src/ai/policy.ts` and check the
-  deaths-per-1000px number did not go up. Reports go to `data/train/` (git-ignored).
+  committed and deploys with the code. After changing `src/ai/policy.ts` or `src/ai/criteria.ts` run
+  `node dist/index.js train eval --tag <what>`: it scores the candidate on fixed seeds against every earlier one
+  (`train ledger`) and must not come out worse; `train reflect` lists where the buddy still dies. Reports and the
+  ledger live in `data/train/` (git-ignored). Six-episode rounds are noisy: judge changes on the 24-episode eval only.
 - `roms/` — ROM files (git-ignored). `web/` — the play page (vanilla JS + jsnes). `src/` — server.
 - Never write into `skills/`; test data goes under `data/`.
 

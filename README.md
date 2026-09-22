@@ -106,7 +106,18 @@ node dist/index.js train run --episodes 3 --duo          # with a scripted partn
 node dist/index.js train run --episodes 1 --jev          # real-time pacing, Jev asked as in production
 node dist/index.js train show                            # what learned.json knows
 node dist/index.js train sweep --param dodgeDistance=48,64,80,96 --episodes 6 --apply
+node dist/index.js train eval --tag "<what changed>"     # 12 solo + 12 duo on fixed seeds → data/train/contra-ledger.json
+node dist/index.js train ledger                          # every candidate scored so far
+node dist/index.js train reflect --last 24               # deaths grouped by place with the last actions, as markdown
 ```
+
+The change loop (borrowed from [JevHarness](https://github.com/TianyuCodings/JevHarness), whose LLM-authored
+harness + reflection + fixed evaluation is the same idea): `reflect` says where and how the buddy dies,
+you change one rule in `src/ai/policy.ts` or one criterion in `src/ai/criteria.ts`, `eval` scores the
+candidate on the same seeds as every previous one (score = deaths per 1000 px, duo counted twice) and
+marks it accepted only if it is not worse than the best so far. Jev's action descriptions are computed per
+state in `criteria.ts` (what each move does right now: walks into a shooter's reach, jumps into a bullet,
+steps off a ledge, leaves the partner), so code supplies the facts and Jev only judges.
 
 The score is deaths per 1000 px of progress (lower is better) plus mean progress; `stuck@x` marks an
 episode that stopped making progress for 30 s (a dead end it refuses to jump into). Reports live in

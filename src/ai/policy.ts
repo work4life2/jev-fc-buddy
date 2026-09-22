@@ -61,7 +61,7 @@ export function rememberHazards(obs: Observation, mem: PolicyMemory): void {
   }
 }
 
-type Rel = EnemyObs & { dx: number; dy: number; dist: number; approaching: boolean };
+export type Rel = EnemyObs & { dx: number; dy: number; dist: number; approaching: boolean };
 
 function fwdBack(obs: Observation): { fwd: Button; back: Button; sign: 1 | -1 } {
   // Vertical levels still move left/right; "forward" then means toward the partner's side.
@@ -203,7 +203,7 @@ export function respawnSteer(game: GameProfile, obs: Observation, mem: PolicyMem
   return undefined;
 }
 
-interface Threat {
+export interface Threat {
   e: Rel;
   kind: "body" | "low" | "steep";
   /** Ticks until the bullet is level with the buddy (or at its closest point). */
@@ -217,7 +217,7 @@ interface Threat {
  * Will this projectile hit, and how? Predicts along its measured velocity; a bullet seen for the
  * first time (velocity unknown) counts as coming straight at us when it is already close.
  */
-function threatOf(e: Rel, dodge: number): Threat | undefined {
+export function threatOf(e: Rel, dodge: number): Threat | undefined {
   const dist = Math.abs(e.dx) + Math.abs(e.dy);
   if (dist > dodge + 40) return undefined;
   const vx = e.vx;
@@ -248,7 +248,7 @@ function threatOf(e: Rel, dodge: number): Threat | undefined {
 }
 
 /** A jump lasts ~30 frames and cannot be steered out of a bullet: only jump into clear air. */
-function jumpIsSafe(rel: Rel[]): boolean {
+export function jumpIsSafe(rel: Rel[]): boolean {
   return !rel.some((e) => e.category === "projectile" && Math.abs(e.dx) + Math.abs(e.dy) < 96 && (e.approaching || Math.abs(e.dx) < 32));
 }
 
@@ -284,7 +284,7 @@ function stopSafely(game: GameProfile, obs: Observation, mem: PolicyMemory, rel:
 }
 
 /** Enemies that stand and shoot (profile keepDistance list, or anything that takes more than one hit). */
-function isShooter(game: GameProfile, e: Rel): boolean {
+export function isShooter(game: GameProfile, e: Rel): boolean {
   const byType = game.enemyTypes?.keepDistance?.[`0x${e.type.toString(16).padStart(2, "0")}`];
   return typeof byType === "number" || e.hp > 1;
 }

@@ -19,8 +19,9 @@ Usage:
   jev-fc-buddy doctor [--no-network]  check environment and configuration
   jev-fc-buddy jobs                   list Termix orders handled
   jev-fc-buddy pi [args...]           interactive pi with the termix + typesafe skills loaded
-  jev-fc-buddy train run|learn|sweep|show [--game id] [--episodes N] [--seed N] [--duo] [--jev] [--learn] [--param k=v1,v2 --apply]
-                                      self-play in a headless emulator; learns pits / kill zones / platforms into games/<id>/learned.json
+  jev-fc-buddy train run|learn|eval|reflect|ledger|sweep|show [--game id] [--episodes N] [--seed N] [--rounds N] [--duo] [--jev] [--tag t]
+                                      self-play in a headless emulator: run/learn fill games/<id>/learned.json, eval scores a candidate on
+                                      fixed seeds into the ledger, reflect writes the death report for the next change
 `);
   process.exit(2);
 }

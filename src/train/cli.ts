@@ -1,6 +1,10 @@
 import { getGame, playableGames, reloadGames, type GameProfile } from "../games/registry.js";
+import { getConfig } from "../config.js";
 import { runEpisode, type EpisodeReport } from "./harness.js";
 import { describe, learn, loadLearned, loadReports, saveLearned, saveReport } from "./learn.js";
+import { loadLedger, recordEval, reflectReport } from "./reflect.js";
+import fs from "node:fs";
+import path from "node:path";
 
 /**
  * `jev-fc-buddy train <run|learn|sweep|show> [--game id] [--episodes N] [--seed N] [--duo] [--jev] [--frames N] [-v]`
@@ -8,8 +12,14 @@ import { describe, learn, loadLearned, loadReports, saveLearned, saveReport } fr
  *   run    play N episodes alone (or with the scripted partner, --duo), save the reports, print a summary
  *   learn  fold every saved report into games/<id>/learned.json (pits, kill zones, platforms)
  *   sweep  --param name=v1,v2,...: play N episodes per value, print the table; --apply writes the best one
+ *   eval   fixed-seed solo + duo evaluation (default seed 7000, 12 each) recorded in the ledger; --tag names the candidate
+ *   reflect  write a markdown report of the latest reports' deaths (grouped by place, with trails) for the next change
  *   show   print what learned.json knows
  */
+
+function getConfigDataDir(): string {
+  return getConfig().dataDir;
+}
 
 function opt(args: string[], k: string): string | undefined {
   const i = args.indexOf(k);
@@ -91,6 +101,34 @@ export async function trainCli(rest: string[]): Promise<void> {
       const learned = learn(game, reports);
       saveLearned(game, learned);
       process.stdout.write(`learned.json written from ${reports.length} episodes:\n${describe(learned)}\n`);
+      return;
+    }
+    case "eval": {
+      const n = Number(opt(args, "--episodes") ?? 12);
+      const seed = Number(opt(args, "--seed") ?? 7000);
+      const evalSeeds = Array.from({ length: n }, (_, i) => seed + i);
+      const tag = opt(args, "--tag") ?? "untagged";
+      process.stdout.write(`eval "${tag}": ${n} solo + ${n} duo episodes, seeds ${seed}..${seed + n - 1}\n`);
+      const solo = await play(game, args.filter((a) => a !== "--duo"), evalSeeds, true);
+      const duo = await play(game, [...args, "--duo"], evalSeeds, true);
+      for (const r of [...solo, ...duo]) saveReport(game, r);
+      const { entry, best } = recordEval(game, tag, seed, n, solo, duo);
+      const fmt = (e: { deaths: number; perKpx: number; progress: number }) => `${e.deaths} deaths, ${e.perKpx.toFixed(2)}/1000px, progress ${e.progress}`;
+      process.stdout.write(`solo: ${fmt(entry.solo)}\nduo:  ${fmt(entry.duo)}\nscore ${entry.score.toFixed(3)} (${entry.sha})${best ? ` vs best ${best.score.toFixed(3)} (${best.tag}, ${best.sha})` : ""} → ${entry.accepted ? "ACCEPTED" : "worse, keep the previous policy"}\n`);
+      return;
+    }
+    case "ledger": {
+      for (const e of loadLedger(game)) process.stdout.write(`${e.at.slice(0, 16)} ${e.sha.padEnd(9)} ${e.tag.padEnd(28)} solo ${String(e.solo.deaths).padStart(3)} (${e.solo.perKpx.toFixed(2)})  duo ${String(e.duo.deaths).padStart(3)} (${e.duo.perKpx.toFixed(2)})  score ${e.score.toFixed(3)} ${e.accepted ? "✓" : "✗"}\n`);
+      return;
+    }
+    case "reflect": {
+      const last = Number(opt(args, "--last") ?? 24);
+      const reports = loadReports(game).slice(-last);
+      if (!reports.length) throw new Error("no reports yet");
+      const md = reflectReport(game, reports);
+      const file = path.join(getConfigDataDir(), "train", `${game.id}-reflect-${new Date().toISOString().slice(0, 16).replace(/[:]/g, "-")}.md`);
+      fs.writeFileSync(file, md);
+      process.stdout.write(md + `\n(saved to ${file})\n`);
       return;
     }
     case "show": {

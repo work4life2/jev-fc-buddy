@@ -2,6 +2,7 @@ import { getConfig } from "../config.js";
 import { logger } from "../log.js";
 import { genreOf, type GameProfile } from "../games/registry.js";
 import { dangersNear, jevDecide, jevEnabled, type JevAction, type JevDecision } from "./jev.js";
+import { actionCriteria } from "./criteria.js";
 import { observe, type Observation } from "./observe.js";
 import { actionFor, edgeAhead, gapAhead, heuristicIntent, IDLE, newMemory, respawnSteer, sameAction, survivalIntent, type Action, type Button, type Intent, type PolicyMemory } from "./policy.js";
 import { newTankMemory, TANK_INTENTS, tankDecide, type TankIntent, type TankMemory } from "./tankPolicy.js";
@@ -226,7 +227,7 @@ export class BuddyBrain {
       this.jevLastAt = now;
       this.stats.jevCalls++;
       const askedAt = now;
-      void jevDecide(this.game, obs, { recent: this.recent.slice(-5), gap, edge: edgeAhead(this.game, obs, sign), dangers: dangersNear(this.game, obs) })
+      void jevDecide(this.game, obs, { recent: this.recent.slice(-5), gap, edge: edgeAhead(this.game, obs, sign), dangers: dangersNear(this.game, obs), criteria: actionCriteria(this.game, obs, this.mem) })
         .then((d) => {
           if (!d || this.stopped) return;
           this.stats.jevIn += d.usage.input;
