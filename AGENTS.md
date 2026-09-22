@@ -49,6 +49,7 @@ The backend runs on the same Linode box as 3dcardagent (`~/code/3dcardagent`, me
 - Termix hosting is **enabled** (2026-09-22): `.env.local` on the server has `WALLET_KEY` (hot wallet
   `0xf8a14ce6…61a7a`, chain bsc) and `A2A_AGENT_ID=cmuc7o7r0jcryzw01qxthkyw5` (GameBuddy.agent, token #355860), so
   `serve` runs the play server + hosting loop and every funded order becomes a code. Only one host per agent id: do
-  not run `npm start` with the same agent id elsewhere. The listing (1 USDC per coin, instant-buyable) was published
-  with `npm run setup -- listing data/listing/cover.png`; edit it with `--update <listingId>`.
+  not run `npm start` with the same agent id elsewhere. The listing `cmuc8ugk83vhptq01lauay26h` (1 USDC per coin, instant-buyable, category
+  "Automation & Ops": Termix has no games category) was published with `npm run setup -- listing data/listing/cover.png`
+  (cover generated with gpt-image-2 on cun.ai, kept git-ignored in `data/listing/`); edit it with `--update cmuc8ugk83vhptq01lauay26h`.
 - Language: everything buyer-facing (page, delivery text, chat replies, coach commentary, listing) is English only.
