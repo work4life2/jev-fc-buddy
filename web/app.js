@@ -60,7 +60,7 @@
         : `${r.code} · ${r.remaining} of ${r.coins} coin${r.coins > 1 ? "s" : ""} left · ${r.sessionMinutes} min of play per coin`;
       await loadGames();
       $("gamePick").hidden = false;
-      $("btnStart").textContent = r.active ? "RESUME \u25B6" : "INSERT COIN \u25B6";
+      $("btnStartText").textContent = r.active ? "RESUME" : "INSERT COIN";
       if (r.active) {
         const el = [...$("games").children].find((c) => c.dataset.id === r.active.gameId);
         if (el) el.click();
@@ -83,6 +83,15 @@
 
   // Gamepad detection on the gate page too, so the mapping can be set before the first coin.
   window.addEventListener("gamepadconnected", (e) => { if (!state.nes) onPad(e.gamepad); });
+  function padStatus(gp) {
+    const box = $("padStatus");
+    box.classList.toggle("on", Boolean(gp));
+    box.classList.toggle("off", !gp);
+    $("padTitle").textContent = gp ? "GAMEPAD CONNECTED" : "NO GAMEPAD";
+    $("padHint").textContent = gp
+      ? `${gp.id.slice(0, 40)}${mapping.current.custom ? " · your saved mapping" : " · standard mapping"}. Buttons in the wrong place? Map them.`
+      : "Plug one in and press any button. Keyboard works as shown above.";
+  }
 
   // ───────────────────────── session ─────────────────────────
   async function startSession() {
@@ -212,12 +221,9 @@
     const why = m.src === "jev" ? "JEV" : m.src === "reflex" ? "REFLEX" : (m.src || "").toUpperCase();
     const el = document.createElement("div");
     el.className = `note ${m.src || ""}`;
-    el.innerHTML = parts.join('<span class="plus">+</span>') + (why ? `<span class="why">${why}</span>` : "");
-    el.style.setProperty("--dx", `${Math.round((Math.random() - 0.5) * 120)}px`);
-    el.style.setProperty("--h", `${Math.max(120, lane.clientHeight - 20)}px`);
+    el.innerHTML = parts.join('<span class="plus">+</span>') + (why ? `<span class="why">${why}</span>` : "") + `<span class="t">${stamp()}</span>`;
     lane.appendChild(el);
-    while (lane.children.length > 24) lane.removeChild(lane.firstChild);
-    setTimeout(() => el.remove(), 2700);
+    while (lane.children.length > 40) lane.removeChild(lane.firstChild);
   }
 
   // ───────────────────────── log view ─────────────────────────
@@ -348,7 +354,7 @@
     window.addEventListener("keydown", (e) => { if (e.code in KEYS && !mapping.capturing) { state.nes.buttonDown(c, KEYS[e.code]); e.preventDefault(); } });
     window.addEventListener("keyup", (e) => { if (e.code in KEYS) { state.nes.buttonUp(c, KEYS[e.code]); e.preventDefault(); } });
     window.addEventListener("gamepadconnected", (e) => onPad(e.gamepad));
-    window.addEventListener("gamepaddisconnected", () => { state.padIndex = null; $("hudPad").textContent = "⌨ KEYBOARD"; });
+    window.addEventListener("gamepaddisconnected", () => { state.padIndex = null; $("hudPad").textContent = "⌨ KEYBOARD"; padStatus(null); });
     // Some browsers only surface an already-plugged pad once it is polled.
     const gps = navigator.getGamepads ? navigator.getGamepads() : [];
     for (const gp of gps) if (gp) onPad(gp);
@@ -359,6 +365,7 @@
     mapping.current = loadMapping(gp.id);
     $("hudPad").textContent = `🎮 ${gp.id.slice(0, 18).toUpperCase()}`;
     $("btnMap").hidden = false;
+    padStatus(gp);
     pushOp("system", "gamepad connected", `${gp.id.slice(0, 40)}${mapping.current.custom ? " · custom mapping" : " · standard mapping"}`);
   }
 

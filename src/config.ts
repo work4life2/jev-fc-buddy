@@ -49,7 +49,7 @@ export interface Config {
    * on the same key at <relay>/v1/systemone, so both default to the relay; TYPESAFE_API_KEY /
    * TYPESAFE_BASE_URL override them for a direct TypeSafe account.
    */
-  typesafe: { apiKey: string; model: string; baseUrl: string; viaRelay: boolean };
+  typesafe: { apiKey: string; model: string; baseUrl: string; viaRelay: boolean; /** USD per million tokens, for the per-coin cost estimate. */ priceInPerM: number; priceOutPerM: number };
   ai: {
     /** How often the browser reports game state (Hz). */
     observeHz: number;
@@ -112,6 +112,8 @@ export function getConfig(): Config {
       model: env("TYPESAFE_MODEL", "jev-latest"),
       baseUrl: env("TYPESAFE_BASE_URL", relayBaseUrl).replace(/\/+$/, ""),
       viaRelay: !env("TYPESAFE_BASE_URL") && !env("TYPESAFE_API_KEY"),
+      priceInPerM: envNum("JEV_PRICE_INPUT_PER_M", 0.042),
+      priceOutPerM: envNum("JEV_PRICE_OUTPUT_PER_M", 0.042),
     },
     ai: {
       observeHz: envNum("AI_OBSERVE_HZ", 24),

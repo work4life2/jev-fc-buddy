@@ -8,7 +8,7 @@ import { logger } from "../log.js";
 import { BuddyBrain, type BuddyMessage } from "../ai/player.js";
 import { jevEnabled } from "../ai/jev.js";
 import { getGame, playableGames, publicGame, romPath, type GameProfile } from "../games/registry.js";
-import { activeWindow, closeSession, findCode, listCodes, mintCode, remaining, spendCoin } from "../coins/store.js";
+import { activeWindow, addWindowUsage, closeSession, findCode, listCodes, mintCode, remaining, spendCoin, type CoinWindow } from "../coins/store.js";
 import { listJobs } from "../jobs/store.js";
 import { getModels, getSessionMinutes, setSessionMinutes } from "../runtimeConfig.js";
 import { dashboardHtml } from "./dashboard.js";
@@ -103,11 +103,20 @@ function serveStatic(res: http.ServerResponse, file: string): void {
   });
 }
 
+/** Stop a session's brain and book what it consumed on the coin window. */
+function stopBrain(s: PlaySession): void {
+  if (!s.brain) return;
+  const u = s.brain.usage();
+  s.brain.stop();
+  s.brain = undefined;
+  addWindowUsage(s.code, s.windowId, u);
+}
+
 function endSession(s: PlaySession, reason: string): void {
   if (s.ended) return;
   s.ended = reason;
   clearTimeout(s.timer);
-  s.brain?.stop();
+  stopBrain(s);
   // A takeover only replaces the browser session; the coin window itself keeps running untouched.
   if (reason !== "resumed in another tab") closeSession(s.code, s.windowId, reason);
   try {
@@ -238,9 +247,30 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       const paid = jobs.filter((j) => j.status === "delivered" || j.status === "settled");
       const revenue = paid.reduce((a, j) => a + (Number(j.price) || 0), 0);
       const windows = codes.flatMap((c) => c.sessions.map((w) => ({ ...w, code: c.code })));
+      const measured = windows.filter((w) => w.usage && (w.usage.jevCalls > 0 || w.usage.playSeconds > 0));
+      const sum = (f: (u: NonNullable<CoinWindow["usage"]>) => number) => measured.reduce((a, w) => a + f(w.usage!), 0);
+      const playSeconds = sum((u) => u.playSeconds);
+      const estCost = sum((u) => u.estCost);
+      const spend = await relaySpend();
       json(res, 200, {
         now: new Date(now).toISOString(),
-        spend: await relaySpend(),
+        spend,
+        perCoin: {
+          measuredCoins: measured.length,
+          playSeconds,
+          jevCalls: sum((u) => u.jevCalls),
+          inputTokens: sum((u) => u.inputTokens),
+          outputTokens: sum((u) => u.outputTokens),
+          estCost,
+          avgCostPerCoin: measured.length ? estCost / measured.length : null,
+          avgCostPerPlayMinute: playSeconds ? estCost / (playSeconds / 60) : null,
+          avgPlayMinutes: measured.length ? playSeconds / 60 / measured.length : null,
+          avgJevCallsPerMinute: playSeconds ? sum((u) => u.jevCalls) / (playSeconds / 60) : null,
+          /** Sanity check from the bill: everything the key spent divided by every coin ever inserted. */
+          keySpendPerCoinUsed: spend.total !== undefined && codes.reduce((a, c) => a + c.used, 0) > 0 ? spend.total / codes.reduce((a, c) => a + c.used, 0) : null,
+          priceInPerM: cfg.typesafe.priceInPerM,
+          priceOutPerM: cfg.typesafe.priceOutPerM,
+        },
         settings: { sessionMinutes: getSessionMinutes(), defaultSessionMinutes: cfg.coins.sessionMinutes, coinsPerDollar: cfg.coins.perDollar, price: cfg.service.price, currency: cfg.service.currency },
         models: { chat: getModels().chatModel, jev: jevEnabled() ? cfg.typesafe.model : null, relay: cfg.relay.baseUrl },
         games: playableGames().map((g) => g.id),
@@ -290,6 +320,14 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       json(res, 200, { sessions: [...sessions.values()].map(sessionPublic) });
       return;
     }
+    if (req.method === "GET" && p === "/api/admin/windows") {
+      const rows = listCodes()
+        .flatMap((c) => c.sessions.map((w) => ({ code: c.code, orderId: c.orderId, ...w })))
+        .sort((a, b) => b.startedAt.localeCompare(a.startedAt))
+        .slice(0, 200);
+      json(res, 200, { windows: rows });
+      return;
+    }
     if (req.method === "GET" && p === "/api/admin/orders") {
       json(res, 200, { orders: listJobs().slice(0, 200) });
       return;
@@ -305,7 +343,7 @@ function attachWs(s: PlaySession, ws: WebSocket): void {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m));
   };
   send({ type: "session", ...sessionPublic(s) });
-  s.brain?.stop();
+  stopBrain(s);
   s.brain = new BuddyBrain({ game: s.game, send });
   ws.on("message", (raw) => {
     let msg: { type?: string; ram?: string; lang?: string };
@@ -330,8 +368,7 @@ function attachWs(s: PlaySession, ws: WebSocket): void {
   ws.on("close", () => {
     if (s.ws === ws) {
       s.ws = undefined;
-      s.brain?.stop();
-      s.brain = undefined;
+      stopBrain(s);
     }
   });
 }

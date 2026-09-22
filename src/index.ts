@@ -27,6 +27,11 @@ async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   const cfg = getConfig();
   initLogFile(path.join(cfg.dataDir, "logs"));
+  // A timed-out Jev request can surface as a stray AbortError rejection inside the TypeSafe SDK; one
+  // flaky model call must not take the play server (and every live session) down with it.
+  process.on("unhandledRejection", (reason) => {
+    log.warn(`unhandled rejection: ${String(reason instanceof Error ? reason.stack ?? reason.message : reason).slice(0, 400)}`);
+  });
 
   switch (cmd) {
     case "serve": {

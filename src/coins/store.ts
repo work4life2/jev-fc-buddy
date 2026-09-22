@@ -22,6 +22,18 @@ export interface CoinWindow {
   reason?: string;
   /** How many times the player (re)entered this window. */
   entries?: number;
+  /** Accumulated over every browser session of this window: what the AI cost. */
+  usage?: WindowUsage;
+}
+
+export interface WindowUsage {
+  /** Seconds a browser was connected and the game was being observed. */
+  playSeconds: number;
+  jevCalls: number;
+  inputTokens: number;
+  outputTokens: number;
+  /** USD, from JEV_PRICE_*_PER_M. */
+  estCost: number;
 }
 
 export interface CoinCode {
@@ -165,6 +177,21 @@ export function closeSession(codeInput: string, windowId: string, reason: string
   if (!s) return;
   s.endedAt = new Date().toISOString();
   s.reason = reason;
+  save();
+}
+
+/** Fold one browser session's AI usage into its coin window (called when the session's brain stops). */
+export function addWindowUsage(codeInput: string, windowId: string, u: { playSeconds: number; jevCalls: number; inputTokens: number; outputTokens: number }): void {
+  const c = findCode(codeInput);
+  const w = c?.sessions.find((x) => x.id === windowId);
+  if (!w || (!u.jevCalls && !u.playSeconds)) return;
+  const { typesafe } = getConfig();
+  const t = (w.usage ??= { playSeconds: 0, jevCalls: 0, inputTokens: 0, outputTokens: 0, estCost: 0 });
+  t.playSeconds += u.playSeconds;
+  t.jevCalls += u.jevCalls;
+  t.inputTokens += u.inputTokens;
+  t.outputTokens += u.outputTokens;
+  t.estCost = (t.inputTokens * typesafe.priceInPerM + t.outputTokens * typesafe.priceOutPerM) / 1e6;
   save();
 }
 

@@ -40,7 +40,10 @@ export class BuddyBrain {
   private recent: string[] = [];
   private macroCooldownUntil = 0;
   private stopped = false;
-  private stats = { ticks: 0, jevCalls: 0, aiDeaths: 0, humanDeaths: 0, actions: new Map<string, number>() };
+  private stats = { ticks: 0, jevCalls: 0, jevIn: 0, jevOut: 0, aiDeaths: 0, humanDeaths: 0, actions: new Map<string, number>() };
+  private readonly startedAt = Date.now();
+  private lastObsAt = 0;
+  private playMs = 0;
   private lastPhase = "";
 
   constructor(o: BrainOptions) {
@@ -68,6 +71,9 @@ export class BuddyBrain {
     this.lastObs = obs;
     this.stats.ticks++;
     const now = obs.at;
+    // Time actually spent connected: gaps longer than 5 s (tab closed, network) are not play time.
+    if (this.lastObsAt && now - this.lastObsAt < 5000) this.playMs += now - this.lastObsAt;
+    this.lastObsAt = now;
 
     if (obs.phase !== this.lastPhase) {
       this.lastPhase = obs.phase;
@@ -145,6 +151,8 @@ export class BuddyBrain {
       void jevDecide(this.game, obs, { recent: this.recent.slice(-5) })
         .then((d) => {
           if (!d || this.stopped) return;
+          this.stats.jevIn += d.usage.input;
+          this.stats.jevOut += d.usage.output;
           if (this.jev && this.jev.askedAt > askedAt) return;
           const changed = !this.jev || this.jev.decision.action !== d.action;
           this.jev = { decision: d, at: Date.now(), askedAt };
@@ -213,6 +221,8 @@ export class BuddyBrain {
       void jevDecide(this.game, obs, { recent: this.recent.slice(-5), gap })
         .then((d) => {
           if (!d || this.stopped) return;
+          this.stats.jevIn += d.usage.input;
+          this.stats.jevOut += d.usage.output;
           if (this.jev && this.jev.askedAt > askedAt) return; // an answer to a newer state already arrived
           const changed = !this.jev || this.jev.decision.action !== d.action;
           this.jev = { decision: d, at: Date.now(), askedAt };
@@ -309,8 +319,14 @@ export class BuddyBrain {
   }
 
 
+  /** What this brain has consumed so far (folded into the coin window when it stops). */
+  usage(): { playSeconds: number; jevCalls: number; inputTokens: number; outputTokens: number } {
+    return { playSeconds: Math.round(this.playMs / 1000), jevCalls: this.stats.jevCalls, inputTokens: this.stats.jevIn, outputTokens: this.stats.jevOut };
+  }
+
   stop() {
+    if (this.stopped) return;
     this.stopped = true;
-    log.info(`brain stopped: ticks=${this.stats.ticks} jev=${this.stats.jevCalls} deaths=${this.stats.aiDeaths}/${this.stats.humanDeaths}`);
+    log.info(`brain stopped: ticks=${this.stats.ticks} play=${Math.round(this.playMs / 1000)}s jev=${this.stats.jevCalls} tokens=${this.stats.jevIn}/${this.stats.jevOut} deaths=${this.stats.aiDeaths}/${this.stats.humanDeaths} (${Math.round((Date.now() - this.startedAt) / 1000)}s)`);
   }
 }

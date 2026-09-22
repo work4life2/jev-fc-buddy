@@ -49,6 +49,8 @@ export interface JevDecision {
   baseInDanger: number;
   latencyMs: number;
   model: string;
+  /** Tokens billed for this request (from the response). */
+  usage: { input: number; output: number };
 }
 
 let client: TypeSafeClient | undefined;
@@ -143,6 +145,7 @@ async function jevDecideTank(game: GameProfile, obs: Observation, extra: { coach
       baseInDanger: res.answers.base_in_danger.noul,
       latencyMs: Date.now() - started,
       model: res.model,
+      usage: { input: res.usage?.input_tokens ?? 0, output: res.usage?.output_tokens ?? 0 },
     };
   } catch (err) {
     log.warn(`jev request failed: ${String(err)}`);
@@ -193,6 +196,7 @@ export async function jevDecide(game: GameProfile, obs: Observation, extra: { co
       baseInDanger: 0,
       latencyMs: Date.now() - started,
       model: res.model,
+      usage: { input: res.usage?.input_tokens ?? 0, output: res.usage?.output_tokens ?? 0 },
     };
   } catch (err) {
     log.warn(`jev request failed: ${String(err)}`);

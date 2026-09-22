@@ -41,12 +41,26 @@
       <div id="gamePick" hidden>
         <h2 class="pixel">SELECT GAME</h2>
         <div id="games" class="games"></div>
-        <button id="btnStart" class="primary pixel big" disabled>INSERT COIN ▶</button>
+        <button id="btnStart" class="primary pixel big" disabled><span id="btnStartText">INSERT COIN</span><span class="tri" aria-hidden="true"></span></button>
         <div class="controlsHint">
           <div class="hintRow"><span class="hintLabel">MOVE</span><kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><span class="or">or arrows</span></div>
           <div class="hintRow"><span class="hintLabel">FIRE</span><kbd>J</kbd><span class="or">or</span><kbd>Z</kbd><span class="hintLabel">JUMP</span><kbd>K</kbd><span class="or">or</span><kbd>X</kbd></div>
           <div class="hintRow"><span class="hintLabel">START</span><kbd>Enter</kbd><span class="hintLabel">SELECT</span><kbd>Shift</kbd></div>
-          <p class="muted small">Any gamepad works too (<button id="btnMapGate" class="link" type="button">map its buttons</button>, saved in this browser). The AI takes the other controller, picks 2-player mode and presses Start for you. One coin runs a timed clock; leave and come back with the same code while it runs.</p>
+          <div id="padStatus" class="padStatus off">
+            <svg class="padIcon" viewBox="0 0 64 40" aria-hidden="true">
+              <rect x="2" y="6" width="60" height="28" rx="6" class="padShell"/>
+              <rect x="8" y="12" width="48" height="4" rx="1" class="padStripe"/>
+              <rect x="13" y="17" width="5" height="15" rx="1" class="padDpad"/><rect x="8" y="22" width="15" height="5" rx="1" class="padDpad"/>
+              <rect x="27" y="26" width="5" height="3" rx="1" class="padSmall"/><rect x="34" y="26" width="5" height="3" rx="1" class="padSmall"/>
+              <circle cx="46" cy="25" r="3.6" class="padBtn"/><circle cx="55" cy="25" r="3.6" class="padBtn"/>
+            </svg>
+            <div class="padText">
+              <div id="padTitle" class="padTitle pixel">NO GAMEPAD</div>
+              <div id="padHint" class="padHint">Plug one in and press any button. Keyboard works as shown above.</div>
+            </div>
+            <button id="btnMapGate" class="ghost pixel padMapBtn" type="button">MAP BUTTONS</button>
+          </div>
+          <p class="muted small">The AI takes the other controller, picks 2-player mode and presses Start for you. One coin runs a timed clock; leave and come back with the same code while it runs.</p>
         </div>
       </div>
       <p id="gateError" class="error pixel" hidden></p>
@@ -65,7 +79,7 @@
           <div class="overlayBox">
             <h2 id="overlayTitle" class="pixel">TIME'S UP</h2>
             <p id="overlayText"></p>
-            <button id="btnAgain" class="primary pixel">INSERT COIN ▶</button>
+            <button id="btnAgain" class="primary pixel">INSERT COIN<span class="tri" aria-hidden="true"></span></button>
             <button id="btnBack" class="ghost pixel">BACK</button>
           </div>
         </div>
