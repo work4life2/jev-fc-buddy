@@ -26,6 +26,10 @@ fi
 
 echo "[deploy] $LOCAL -> $REMOTE"
 as_user git reset -q --hard "origin/$BRANCH"
+# deploy.sh itself may have just changed: re-run the fresh copy once instead of finishing with stale logic.
+if [ "${DEPLOY_REEXEC:-}" != 1 ]; then
+  DEPLOY_REEXEC=1 exec bash "$TARGET/deploy/deploy.sh" --force
+fi
 as_user npm ci --ignore-scripts --no-audit --no-fund
 as_user npm run build
 
