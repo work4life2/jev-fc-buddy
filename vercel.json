@@ -1,0 +1,13 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "npm install --omit=dev --ignore-scripts --no-audit --no-fund",
+  "buildCommand": "JEV_API_BASE=\"${JEV_API_BASE:-https://fc.172.104.55.67.sslip.io}\" npm run build:web",
+  "outputDirectory": "web",
+  "cleanUrls": false,
+  "rewrites": [{ "source": "/play", "destination": "/index.html" }],
+  "headers": [
+    { "source": "/vendor/(.*)", "headers": [{ "key": "Cache-Control", "value": "public, max-age=86400" }] },
+    { "source": "/(.*)", "headers": [{ "key": "X-Content-Type-Options", "value": "nosniff" }] }
+  ]
+}

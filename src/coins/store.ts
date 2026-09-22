@@ -2,12 +2,27 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { getConfig } from "../config.js";
+import { getSessionMinutes } from "../runtimeConfig.js";
 
 /**
  * Coin codes: a buyer pays N dollars on Termix and receives one code worth N coins. One coin
- * buys one play session (COIN_SESSION_MINUTES, or until game over). Codes live in
- * DATA_DIR/coins.json; the file is the source of truth and is rewritten atomically.
+ * opens one play window of SESSION_MINUTES (operator-adjustable at runtime); the window starts
+ * when the coin is inserted and keeps running whether or not the player stays on the page, so
+ * leaving and coming back within the window costs nothing (now - insertedAt < minutes).
+ * Codes live in DATA_DIR/coins.json; the file is the source of truth and is rewritten atomically.
  */
+
+export interface CoinWindow {
+  id: string;
+  gameId: string;
+  startedAt: string;
+  /** When this coin's play window closes (ISO). Older records without it are treated as closed. */
+  expiresAt?: string;
+  endedAt?: string;
+  reason?: string;
+  /** How many times the player (re)entered this window. */
+  entries?: number;
+}
 
 export interface CoinCode {
   code: string;
@@ -18,7 +33,7 @@ export interface CoinCode {
   orderId: string;
   buyer?: string;
   note?: string;
-  sessions: Array<{ id: string; gameId: string; startedAt: string; endedAt?: string; reason?: string }>;
+  sessions: CoinWindow[];
 }
 
 interface CoinFile {
@@ -83,6 +98,7 @@ export function mintCode(coins: number, meta: { orderId: string; buyer?: string;
 
 export function findCode(input: string): CoinCode | undefined {
   const body = normalizeCode(input);
+  if (body.length !== 12) return undefined;
   return load().codes[body];
 }
 
@@ -94,21 +110,59 @@ export function remaining(c: CoinCode): number {
   return Math.max(0, c.coins - c.used);
 }
 
-/** Spend one coin and open a session. Returns undefined when the code is exhausted or unknown. */
-export function spendCoin(input: string, gameId: string): { code: CoinCode; sessionId: string } | undefined {
-  const c = findCode(input);
-  if (!c || remaining(c) <= 0) return undefined;
-  const sessionId = crypto.randomBytes(8).toString("hex");
-  c.used += 1;
-  c.sessions.push({ id: sessionId, gameId, startedAt: new Date().toISOString() });
-  save();
-  return { code: c, sessionId };
+/** The coin window that is still running on this code, if any (not ended by time, expiresAt in the future). */
+export function activeWindow(c: CoinCode, now = Date.now()): CoinWindow | undefined {
+  for (let i = c.sessions.length - 1; i >= 0; i--) {
+    const w = c.sessions[i];
+    if (!w.expiresAt) continue;
+    if (w.reason === "time is up") continue;
+    if (Date.parse(w.expiresAt) > now) return w;
+  }
+  return undefined;
 }
 
-export function closeSession(codeInput: string, sessionId: string, reason: string): void {
+export interface SpendResult {
+  code: CoinCode;
+  window: CoinWindow;
+  /** True when an already-running window was re-entered instead of spending a coin. */
+  resumed: boolean;
+}
+
+/**
+ * Insert a coin: re-enter the running window if there is one, otherwise spend one coin and open a
+ * new window of the configured minutes. Returns undefined when the code is unknown or exhausted.
+ */
+export function spendCoin(input: string, gameId: string): SpendResult | undefined {
+  const c = findCode(input);
+  if (!c) return undefined;
+  const now = Date.now();
+  const running = activeWindow(c, now);
+  if (running) {
+    running.entries = (running.entries ?? 1) + 1;
+    running.endedAt = undefined;
+    running.reason = undefined;
+    save();
+    return { code: c, window: running, resumed: true };
+  }
+  if (remaining(c) <= 0) return undefined;
+  const window: CoinWindow = {
+    id: crypto.randomBytes(8).toString("hex"),
+    gameId,
+    startedAt: new Date(now).toISOString(),
+    expiresAt: new Date(now + getSessionMinutes() * 60_000).toISOString(),
+    entries: 1,
+  };
+  c.used += 1;
+  c.sessions.push(window);
+  save();
+  return { code: c, window, resumed: false };
+}
+
+/** Record how a window ended. "player quit" keeps the window open for re-entry; "time is up" closes it. */
+export function closeSession(codeInput: string, windowId: string, reason: string): void {
   const c = findCode(codeInput);
-  const s = c?.sessions.find((x) => x.id === sessionId);
-  if (!s || s.endedAt) return;
+  const s = c?.sessions.find((x) => x.id === windowId);
+  if (!s) return;
   s.endedAt = new Date().toISOString();
   s.reason = reason;
   save();

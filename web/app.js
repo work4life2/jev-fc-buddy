@@ -3,7 +3,7 @@
 (() => {
   const $ = (id) => document.getElementById(id);
   const BTN = { A: 0, B: 1, SELECT: 2, START: 3, UP: 4, DOWN: 5, LEFT: 6, RIGHT: 7 };
-  const state = { code: null, coins: 0, games: [], game: null, session: null, ws: null, nes: null, running: false, muted: false, padIndex: null, lang: navigator.language || "en", obsHz: 12 };
+  const state = { code: null, coins: 0, games: [], game: null, session: null, ws: null, nes: null, running: false, muted: false, padIndex: null, lang: "en", obsHz: 12 };
 
   // Where the API lives. Same origin when the server serves this page; when the page is hosted
   // elsewhere (Vercel), /config.js sets window.JEV_API_BASE to the server's https URL.
@@ -31,7 +31,8 @@
     for (const g of games) {
       const el = document.createElement("div");
       el.className = "game";
-      el.innerHTML = `<div class="t">${g.title}</div><div class="l">${g.titleLocal || ""} · ${g.system.toUpperCase()} · 2P co-op</div>`;
+      el.dataset.id = g.id;
+      el.innerHTML = `<div class="t">${g.title}</div><div class="l">${g.system.toUpperCase()} · 2P co-op</div>`;
       el.onclick = () => {
         [...box.children].forEach((c) => c.classList.remove("sel"));
         el.classList.add("sel");
@@ -51,10 +52,18 @@
       state.code = r.code;
       state.coins = r.remaining;
       $("redeemResult").hidden = false;
-      $("redeemResult").textContent = `${r.code} · ${r.remaining} of ${r.coins} coin${r.coins > 1 ? "s" : ""} left · ${r.sessionMinutes} min per coin`;
+      const left = r.active ? Math.max(1, Math.round(r.active.secondsLeft / 60)) : 0;
+      $("redeemResult").textContent = r.active
+        ? `${r.code} · your clock is running: about ${left} min left on this coin · ${r.remaining} of ${r.coins} coin${r.coins > 1 ? "s" : ""} still unused`
+        : `${r.code} · ${r.remaining} of ${r.coins} coin${r.coins > 1 ? "s" : ""} left · ${r.sessionMinutes} min of play per coin`;
       await loadGames();
       $("gamePick").hidden = false;
-      if (r.remaining <= 0) $("btnStart").disabled = true;
+      $("btnStart").textContent = r.active ? "Resume \u25B6" : "Insert coin \u25B6";
+      if (r.active) {
+        const el = [...$("games").children].find((c) => c.dataset.id === r.active.gameId);
+        if (el) el.click();
+      }
+      if (r.remaining <= 0 && !r.active) $("btnStart").disabled = true;
       else if (params.get("auto") === "1" && state.game) startSession(); // testing aid: spends a coin on load
     } catch (err) {
       $("gateError").hidden = false;
@@ -65,8 +74,8 @@
 
   $("btnStart").onclick = () => startSession();
   $("btnAgain").onclick = () => startSession();
-  $("btnBack").onclick = () => location.href = `/?code=${encodeURIComponent(state.code || "")}`;
-  $("btnQuit").onclick = () => { if (state.ws) state.ws.send(JSON.stringify({ type: "quit" })); showOverlay("Session ended", "Thanks for playing. Insert another coin to continue where you left off."); };
+  $("btnBack").onclick = () => location.href = `${location.pathname}?code=${encodeURIComponent(state.code || "")}`;
+  $("btnQuit").onclick = () => { if (state.ws) state.ws.send(JSON.stringify({ type: "quit" })); showOverlay("Session paused", "Your clock keeps running until the coin's time is up. Come back with the same code to continue."); };
   $("btnMute").onclick = () => { state.muted = !state.muted; $("btnMute").textContent = state.muted ? "🔇" : "🔊"; };
 
   // Gamepad detection on the gate page too, so the mapping can be set before the first coin.
@@ -83,8 +92,9 @@
       $("gate").hidden = true;
       $("play").hidden = false;
       $("hud").hidden = false;
-      $("hudGame").textContent = `${s.game.title}${s.game.titleLocal ? " · " + s.game.titleLocal : ""}`;
+      $("hudGame").textContent = s.game.title;
       $("hudCoins").textContent = `🪙 ${s.remaining} left`;
+      if (s.resumed) pushOp("system", "resumed: your coin's clock was already running", "");
       state.obsRanges = s.game.ramRanges;
       if (!state.nes) await bootEmulator(s);
       connect(s);
@@ -99,7 +109,7 @@
     $("overlayTitle").textContent = title;
     $("overlayText").textContent = text;
     $("overlay").hidden = false;
-    $("btnAgain").disabled = state.coins <= 0;
+    $("btnAgain").disabled = state.coins <= 0 && !(state.expiresAt && state.expiresAt > Date.now());
   }
 
   function connect(s) {
@@ -149,7 +159,9 @@
         break;
       case "expired":
         aiHeld.clear(); aiTurbo.clear();
-        showOverlay(m.reason === "time is up" ? "Time's up ⏱" : "Session ended", m.reason === "time is up" ? "This coin is spent. Insert another coin to keep playing — the game stays exactly where it is." : m.reason);
+        if (m.reason === "time is up") { state.expiresAt = 0; showOverlay("Time's up \u23F1", "This coin is spent. Insert another coin to keep playing: the game stays exactly where it is."); }
+        else if (m.reason === "resumed in another tab") showOverlay("Taken over", "This code was just used in another tab or browser. Only one session per coin can run at a time.");
+        else showOverlay("Session paused", m.reason);
         break;
     }
   }

@@ -1,4 +1,5 @@
 import { getConfig } from "../config.js";
+import { getSessionMinutes } from "../runtimeConfig.js";
 import { logger } from "../log.js";
 import { createTextSession, promptForText } from "../agent/session.js";
 import { termix, type WatchEvent } from "../termix/client.js";
@@ -17,16 +18,16 @@ function senderName(from: WatchEvent["from"]): string {
 export function chatSystemPrompt(): string {
   const cfg = getConfig();
   const games = playableGames()
-    .map((g) => `${g.title}${g.titleLocal ? ` (${g.titleLocal})` : ""}`)
+    .map((g) => g.title)
     .join(", ");
   return `You are the sales and support agent for "${cfg.service.title}" on the Termix agent marketplace.
 
-What is sold: coin codes for an AI co-op buddy that plays classic NES games together with the buyer in the browser. Price: ${cfg.service.price} ${cfg.service.currency} per coin (1 coin = one play session of up to ${cfg.coins.sessionMinutes} minutes; buying for N ${cfg.service.currency} gives N coins on one code). After the order is funded the code and the play link are delivered automatically within minutes — no human in the loop.
+What is sold: coin codes for an AI co-op buddy that plays classic NES games together with the buyer in the browser. Price: ${cfg.service.price} ${cfg.service.currency} per coin (1 coin = ${getSessionMinutes()} minutes of play, and the buyer can leave and come back while that clock runs; buying for N ${cfg.service.currency} gives N coins on one code). After the order is funded the code and the play link are delivered automatically within minutes — no human in the loop.
 Games available now: ${games || "none yet"}. More games are added over time; do not promise specific titles that are not in this list.
 How it plays: desktop browser, the buyer is player 1 (keyboard or any gamepad), the AI is player 2 and follows/covers the buyer. The AI's inputs and live commentary scroll on the right of the game screen. The buddy is driven by TypeSafe's Jev model for split-second decisions plus an LLM coach.
-Play page: ${cfg.http.publicBaseUrl}/
+Play page: ${cfg.http.playBaseUrl}/
 
-Rules: answer in the buyer's language; be brief and friendly; never ask for private keys or payment outside the marketplace; if asked for a refund or something you cannot do, explain that the order page has the dispute/redo actions. If the buyer already has an order, tell them their code arrives in the delivery of that order. Reply text only, no markdown headings.`;
+Rules: always answer in English; be brief and friendly; never ask for private keys or payment outside the marketplace; if asked for a refund or something you cannot do, explain that the order page has the dispute/redo actions. If the buyer already has an order, tell them their code arrives in the delivery of that order. Reply text only, no markdown headings.`;
 }
 
 export async function handleChatMessage(ev: WatchEvent): Promise<void> {

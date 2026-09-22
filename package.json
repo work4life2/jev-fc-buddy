@@ -20,7 +20,8 @@
     "code": "node dist/index.js code",
     "model": "node dist/index.js model",
     "pi": "node dist/index.js pi",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build:web": "node scripts/copy-vendor.mjs && node scripts/write-web-config.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.85.1",

@@ -26,7 +26,7 @@ export function coachSystemPrompt(game: GameProfile, lang: string): string {
   const actions = Object.entries(actionsFor(game))
     .map(([k, v]) => `- ${k}: ${v}`)
     .join("\n");
-  return `You are the strategist and commentator of an AI teammate ("the buddy", player ${game.players.ai}) playing ${game.title}${game.titleLocal ? ` (${game.titleLocal})` : ""} together with a human (player ${game.players.human}).
+  return `You are the strategist and commentator of an AI teammate ("the buddy", player ${game.players.ai}) playing ${game.title} together with a human (player ${game.players.human}).
 
 About the game:
 ${game.coachBrief}

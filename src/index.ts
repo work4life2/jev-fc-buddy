@@ -64,11 +64,12 @@ async function main() {
     }
     case "code": {
       const { mintCode, listCodes, remaining } = await import("./coins/store.js");
+      const { getSessionMinutes } = await import("./runtimeConfig.js");
       const sub = rest[0];
       if (sub === "mint") {
         const coins = Number(rest[1] ?? 1);
         const rec = mintCode(coins, { orderId: "local", note: rest.slice(2).join(" ") || "minted by operator" });
-        process.stdout.write(`✅ ${rec.code}  (${rec.coins} coin${rec.coins > 1 ? "s" : ""}, ${cfg.coins.sessionMinutes} min each)\n   play: ${cfg.http.publicBaseUrl}/?code=${rec.code}\n`);
+        process.stdout.write(`✅ ${rec.code}  (${rec.coins} coin${rec.coins > 1 ? "s" : ""}, ${getSessionMinutes()} min each)\n   play: ${cfg.http.playBaseUrl}/?code=${rec.code}\n`);
       } else if (sub === "list" || !sub) {
         for (const c of listCodes()) process.stdout.write(`${c.code}  ${String(remaining(c)).padStart(3)}/${String(c.coins).padEnd(3)} left  ${c.orderId.padEnd(28)} ${c.createdAt.slice(0, 16)}  ${c.note ?? ""}\n`);
       } else usage();

@@ -1,35 +1,86 @@
-import { getConfig } from "../config.js";
-import { getModels } from "../runtimeConfig.js";
-import { jevEnabled } from "../ai/jev.js";
-import { playableGames } from "../games/registry.js";
-
-/** Operator dashboard: codes, live sessions, one-click mint (loopback or ADMIN_TOKEN). */
+/**
+ * Operator dashboard, served at ADMIN_PATH. A single static page: it asks for ADMIN_TOKEN once
+ * (kept in this browser's localStorage) and calls /api/admin/* with it as a bearer. Shows the relay
+ * spend (OpenRouter key usage), coin/order/revenue counters, live sessions, codes and orders, and
+ * lets the operator change the minutes per coin and mint codes.
+ */
 export function dashboardHtml(): string {
-  const cfg = getConfig();
-  const m = getModels();
-  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>jev-fc-buddy · operator</title>
+  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex"><title>Jev FC Buddy · operator</title>
 <style>
-body{font:14px/1.5 system-ui,sans-serif;background:#0f1115;color:#e6e6e6;margin:0;padding:24px}
-h1{font-size:18px;margin:0 0 12px}h2{font-size:15px;margin:24px 0 8px;color:#9ad}
-table{border-collapse:collapse;width:100%}td,th{padding:6px 8px;border-bottom:1px solid #2a2f3a;text-align:left;font-size:13px}
-code{background:#1b1f27;padding:2px 5px;border-radius:4px}button,input{font:inherit;padding:6px 10px;border-radius:6px;border:1px solid #39404f;background:#171a21;color:#eee}
-button{cursor:pointer;background:#2d6cdf;border-color:#2d6cdf}.muted{color:#8a91a0}
+:root{--bg:#0b0d12;--panel:#12151d;--line:#222836;--text:#e8eaf0;--muted:#8a92a6;--ok:#7ee787;--warn:#ffbf47;--bad:#ff7b7b;--accent:#2d6cdf;--jev:#4fd1ff}
+*{box-sizing:border-box}body{font:14px/1.5 Inter,system-ui,sans-serif;background:var(--bg);color:var(--text);margin:0;padding:22px 26px;max-width:1280px}
+h1{font-size:18px;margin:0 0 4px;letter-spacing:.06em}h2{font-size:12px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);margin:26px 0 10px}
+.sub{color:var(--muted);font-size:12px}code{background:#1b1f27;padding:2px 6px;border-radius:4px;font-size:12.5px}
+.cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:12px 14px}
+.card .k{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}.card .v{font-size:22px;font-weight:700;margin-top:2px}.card .s{font-size:12px;color:var(--muted)}
+table{border-collapse:collapse;width:100%;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+td,th{padding:7px 10px;border-bottom:1px solid var(--line);text-align:left;font-size:13px;vertical-align:top}th{color:var(--muted);font-weight:600;font-size:11px;letter-spacing:.06em;text-transform:uppercase}tr:last-child td{border-bottom:0}
+button,input{font:inherit;padding:7px 11px;border-radius:8px;border:1px solid #39404f;background:#171a21;color:#eee}button{cursor:pointer;background:var(--accent);border-color:var(--accent);font-weight:600}button.ghost{background:transparent;border-color:var(--line)}
+form{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.muted{color:var(--muted)}
+#login{max-width:520px;margin:60px auto;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:26px}#login input{width:100%;margin:10px 0}
+.row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}.pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11px;font-weight:700;background:#1b1f27}
 </style></head><body>
-<h1>jev-fc-buddy · operator</h1>
-<div class="muted">games: ${playableGames().map((g) => g.id).join(", ") || "none (put a ROM in roms/)"} · Jev: ${jevEnabled() ? "on" : "off (TYPESAFE_API_KEY missing)"} · coach: ${m.coachModel} · chat: ${m.chatModel} · relay: ${cfg.relay.baseUrl} · ${cfg.coins.sessionMinutes} min / coin</div>
+<div id="login" hidden><h1>Operator sign-in</h1><p class="sub">Paste the ADMIN_TOKEN from the server's .env.local. It stays in this browser only.</p><form id="loginForm"><input id="tok" type="password" placeholder="ADMIN_TOKEN" autocomplete="off"><button>Sign in</button></form><p id="loginErr" class="bad" hidden></p></div>
+<div id="app" hidden>
+<div class="row"><div><h1>JEV FC BUDDY · OPERATOR</h1><div id="meta" class="sub"></div></div><div><span id="clock" class="sub"></span> <button class="ghost" id="refresh">Refresh</button> <button class="ghost" id="logout">Sign out</button></div></div>
+
+<h2>Spend (relay key, USD)</h2>
+<div class="cards" id="spend"></div>
+<div id="spendErr" class="sub"></div>
+
+<h2>Business</h2>
+<div class="cards" id="biz"></div>
+
+<h2>Settings</h2>
+<form id="settings"><label>Minutes of play per coin <input id="minutes" type="number" min="1" max="1440" step="1" style="width:90px"></label><button>Save</button><button type="button" class="ghost" id="minutesReset">Use .env default</button><span id="settingsMsg" class="sub"></span></form>
+<p class="sub">Applies to coins inserted from now on; a window that is already running keeps its length. A player may leave and come back for free while their window is running (now − insert time &lt; minutes).</p>
+
 <h2>Mint a code</h2>
-<form id="mint"><input name="coins" type="number" min="1" value="3" style="width:80px"> coins <input name="note" placeholder="note" style="width:240px"> <button>Mint</button> <span id="minted"></span></form>
-<h2>Live sessions</h2><table id="sessions"><tr><th>session</th><th>game</th><th>started</th><th>expires</th><th>ended</th></tr></table>
-<h2>Codes</h2><table id="codes"><tr><th>code</th><th>coins</th><th>used</th><th>order</th><th>buyer</th><th>created</th><th>note</th></tr></table>
+<form id="mint"><input name="coins" type="number" min="1" value="1" style="width:80px"> coins <input name="note" placeholder="note (optional)" style="width:260px"><button>Mint</button><span id="minted"></span></form>
+
+<h2>Live sessions</h2><table id="sessions"></table>
+<h2>Orders (Termix)</h2><table id="orders"></table>
+<h2>Codes</h2><table id="codes"></table>
+</div>
 <script>
-const h={};const t=new URLSearchParams(location.search).get('token');if(t)h.authorization='Bearer '+t;
-async function load(){
-  const c=await (await fetch('/api/admin/codes',{headers:h})).json();
-  document.getElementById('codes').innerHTML='<tr><th>code</th><th>coins</th><th>used</th><th>order</th><th>buyer</th><th>created</th><th>note</th></tr>'+(c.codes||[]).map(x=>'<tr><td><code>'+x.code+'</code></td><td>'+x.coins+'</td><td>'+x.used+'</td><td>'+x.orderId+'</td><td>'+(x.buyer||'')+'</td><td>'+x.createdAt.slice(0,16).replace('T',' ')+'</td><td>'+(x.note||'')+'</td></tr>').join('');
-  const s=await (await fetch('/api/admin/sessions',{headers:h})).json();
-  document.getElementById('sessions').innerHTML='<tr><th>session</th><th>game</th><th>started</th><th>expires</th><th>ended</th></tr>'+(s.sessions||[]).map(x=>'<tr><td>'+x.sessionId+'</td><td>'+x.game.id+'</td><td>'+x.startedAt.slice(11,19)+'</td><td>'+x.expiresAt.slice(11,19)+'</td><td>'+(x.ended||'')+'</td></tr>').join('');
+const $=id=>document.getElementById(id);
+const KEY='jevbuddy.adminToken';
+let token=localStorage.getItem(KEY)||'';
+const esc=s=>String(s==null?'':s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'})[c]);
+const usd=v=>v==null?'—':'$'+Number(v).toFixed(v<1?4:2);
+const when=s=>s?s.slice(0,16).replace('T',' ')+'Z':'';
+const ago=s=>{if(!s)return '';const d=(Date.now()-Date.parse(s))/1000;return d<60?Math.round(d)+'s':d<3600?Math.round(d/60)+'m':d<86400?Math.round(d/3600)+'h':Math.round(d/86400)+'d'};
+async function api(path,body){
+  const r=await fetch(path,{method:body?'POST':'GET',headers:{authorization:'Bearer '+token,...(body?{'content-type':'application/json'}:{})},body:body?JSON.stringify(body):undefined});
+  if(r.status===401){signOut('Wrong or missing token');throw new Error('unauthorized')}
+  const j=await r.json().catch(()=>({}));if(!r.ok)throw new Error(j.error||('HTTP '+r.status));return j;
 }
-document.getElementById('mint').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);const r=await (await fetch('/api/admin/codes',{method:'POST',headers:{...h,'content-type':'application/json'},body:JSON.stringify({coins:Number(f.get('coins')),note:f.get('note')})})).json();document.getElementById('minted').innerHTML=r.code?'<code>'+r.code+'</code> → <a href="'+r.playUrl+'" target="_blank">'+r.playUrl+'</a>':JSON.stringify(r);load();};
-load();setInterval(load,10000);
+function signOut(msg){localStorage.removeItem(KEY);token='';$('app').hidden=true;$('login').hidden=false;if(msg){$('loginErr').hidden=false;$('loginErr').textContent=msg}}
+$('loginForm').onsubmit=e=>{e.preventDefault();token=$('tok').value.trim();localStorage.setItem(KEY,token);$('loginErr').hidden=true;boot()};
+$('logout').onclick=()=>signOut('');$('refresh').onclick=()=>load();
+function card(k,v,s,cls){return '<div class="card"><div class="k">'+esc(k)+'</div><div class="v '+(cls||'')+'">'+v+'</div><div class="s">'+(s||'')+'</div></div>'}
+async function load(){
+  const o=await api('/api/admin/overview');
+  $('clock').textContent='updated '+new Date(o.now).toLocaleTimeString();
+  $('meta').innerHTML='API <code>'+esc(o.urls.api)+'</code> · play page <code>'+esc(o.urls.play)+'</code> · games: '+esc(o.games.join(', ')||'none')+' · coach <code>'+esc(o.models.coach)+'</code> · chat <code>'+esc(o.models.chat)+'</code> · Jev '+(o.models.jev?'<span class="ok">on</span> ('+esc(o.models.jev)+')':'<span class="bad">off</span>')+' · Termix hosting '+(o.hosting.enabled?'<span class="ok">on</span> ('+esc(o.hosting.chain)+', agent '+esc(o.hosting.agentId)+')':'<span class="warn">off</span>');
+  const sp=o.spend;
+  $('spend').innerHTML=card('Today',usd(sp.today))+card('This week',usd(sp.week))+card('This month',usd(sp.month))+card('All time',usd(sp.total))+card('Credits left',usd(sp.creditsLeft),sp.credits!=null?'of '+usd(sp.credits)+' bought':'',sp.creditsLeft!=null&&sp.creditsLeft<1?'bad':'ok');
+  $('spendErr').innerHTML=sp.error?'<span class="warn">Spend unavailable: '+esc(sp.error)+'</span> ('+esc(sp.baseUrl)+')':'Source: '+esc(sp.baseUrl)+' key usage, refreshed every minute. Jev, the coach and buyer chat all bill to this key.';
+  const c=o.coins,od=o.orders,se=o.sessions,st=o.settings;
+  $('biz').innerHTML=card('Revenue',od.revenue.toFixed(2)+' '+esc(od.currency),od.paid+' paid order'+(od.paid===1?'':'s')+(od.failed?', <span class="bad">'+od.failed+' failed</span>':''),'ok')+card('Coins sold / minted',c.used+' / '+c.minted,c.codes+' codes · '+c.usedToday+' inserted in 24h')+card('Live sessions',se.live,c.activeWindows+' open window'+(c.activeWindows===1?'':'s')+' · '+se.openedSinceStart+' since restart')+card('Per coin',st.sessionMinutes+' min',st.price+' '+esc(st.currency)+' → '+st.coinsPerDollar+' coin'+(st.coinsPerDollar===1?'':'s'));
+  if(document.activeElement!==$('minutes'))$('minutes').value=st.sessionMinutes;
+  $('minutesReset').textContent='Use .env default ('+st.defaultSessionMinutes+')';
+  const [s,cd,or]=await Promise.all([api('/api/admin/sessions'),api('/api/admin/codes'),api('/api/admin/orders')]);
+  $('sessions').innerHTML='<tr><th>session</th><th>code</th><th>game</th><th>started</th><th>expires</th><th>coins left</th><th>state</th></tr>'+((s.sessions||[]).map(x=>'<tr><td><code>'+esc(x.sessionId)+'</code></td><td><code>'+esc(x.windowId.slice(0,8))+'</code></td><td>'+esc(x.game.id)+'</td><td>'+when(x.startedAt)+'</td><td>'+when(x.expiresAt)+'</td><td>'+x.remaining+'</td><td>'+(x.ended?'<span class="muted">'+esc(x.ended)+'</span>':'<span class="ok">playing</span>')+'</td></tr>').join('')||'<tr><td class="muted" colspan="7">none</td></tr>');
+  $('orders').innerHTML='<tr><th>order</th><th>status</th><th>price</th><th>buyer</th><th>code</th><th>updated</th><th>error</th></tr>'+((or.orders||[]).map(j=>'<tr><td><code>'+esc(j.orderId)+'</code></td><td><span class="pill '+(j.status==='failed'?'bad':j.status==='settled'||j.status==='delivered'?'ok':'warn')+'">'+esc(j.status)+'</span></td><td>'+esc(j.price||'')+' '+esc(j.currency||'')+'</td><td>'+esc(j.buyer||'')+'</td><td><code>'+esc(j.code||'—')+'</code></td><td>'+ago(j.updatedAt)+' ago</td><td class="bad">'+esc((j.error||'').slice(0,120))+'</td></tr>').join('')||'<tr><td class="muted" colspan="7">no orders yet</td></tr>');
+  $('codes').innerHTML='<tr><th>code</th><th>coins</th><th>used</th><th>window</th><th>order</th><th>buyer</th><th>created</th><th>note</th></tr>'+((cd.codes||[]).map(x=>'<tr><td><code>'+esc(x.code)+'</code></td><td>'+x.coins+'</td><td>'+x.used+'</td><td>'+(x.active?'<span class="ok">open until '+when(x.active)+'</span>':'<span class="muted">—</span>')+'</td><td>'+esc(x.orderId)+'</td><td>'+esc(x.buyer||'')+'</td><td>'+when(x.createdAt)+'</td><td>'+esc(x.note||'')+'</td></tr>').join('')||'<tr><td class="muted" colspan="8">no codes yet</td></tr>');
+}
+$('settings').onsubmit=async e=>{e.preventDefault();try{const r=await api('/api/admin/settings',{sessionMinutes:Number($('minutes').value)});$('settingsMsg').textContent='Saved: '+r.sessionMinutes+' min per coin';load()}catch(err){$('settingsMsg').textContent=err.message}};
+$('minutesReset').onclick=async()=>{try{const r=await api('/api/admin/settings',{sessionMinutes:null});$('settingsMsg').textContent='Back to .env default: '+r.sessionMinutes+' min';load()}catch(err){$('settingsMsg').textContent=err.message}};
+$('mint').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{const r=await api('/api/admin/codes',{coins:Number(f.get('coins')),note:f.get('note')});$('minted').innerHTML='<code>'+esc(r.code)+'</code> → <a href="'+esc(r.playUrl)+'" target="_blank" style="color:var(--jev)">'+esc(r.playUrl)+'</a>';load()}catch(err){$('minted').textContent=err.message}};
+let timer;
+async function boot(){if(!token){$('login').hidden=false;return}try{await load();$('login').hidden=true;$('app').hidden=false;clearInterval(timer);timer=setInterval(()=>load().catch(()=>{}),15000)}catch(err){if(err.message!=='unauthorized'){$('loginErr').hidden=false;$('loginErr').textContent=err.message;$('login').hidden=false}}}
+boot();
 </script></body></html>`;
 }

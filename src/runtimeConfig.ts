@@ -3,8 +3,9 @@ import path from "node:path";
 import { getConfig } from "./config.js";
 
 /**
- * Models can be switched at runtime without restarting. Overrides live in
- * DATA_DIR/runtime-config.json and win over the .env defaults; every new pi session reads them fresh.
+ * Settings that can be changed at runtime without restarting (models, the coin window length).
+ * Overrides live in DATA_DIR/runtime-config.json and win over the .env defaults; every new pi
+ * session and every new coin window reads them fresh.
  */
 export interface ModelSettings {
   /** pi model for the in-game coach (strategy + commentary), e.g. relay/gemini-2.5-flash-lite */
@@ -18,16 +19,26 @@ export interface ModelSettings {
 export type ModelKey = keyof ModelSettings;
 export const MODEL_KEYS: ModelKey[] = ["coachModel", "chatModel", "thinking"];
 
+interface Overrides extends Partial<ModelSettings> {
+  /** Minutes of play one coin buys (operator dashboard). */
+  sessionMinutes?: number;
+}
+
 function file(): string {
   return path.join(getConfig().dataDir, "runtime-config.json");
 }
 
-function readOverrides(): Partial<ModelSettings> {
+function readOverrides(): Overrides {
   try {
-    return JSON.parse(fs.readFileSync(file(), "utf8")) as Partial<ModelSettings>;
+    return JSON.parse(fs.readFileSync(file(), "utf8")) as Overrides;
   } catch {
     return {};
   }
+}
+
+function writeOverrides(o: Overrides): void {
+  fs.mkdirSync(path.dirname(file()), { recursive: true });
+  fs.writeFileSync(file(), JSON.stringify(o, null, 2));
 }
 
 export function getModels(): ModelSettings & { overrides: Partial<ModelSettings>; defaults: ModelSettings } {
@@ -39,7 +50,7 @@ export function getModels(): ModelSettings & { overrides: Partial<ModelSettings>
     coachModel: o.coachModel || defaults.coachModel,
     chatModel: o.chatModel || defaults.chatModel,
     thinking: o.thinking || defaults.thinking,
-    overrides: o,
+    overrides: { coachModel: o.coachModel, chatModel: o.chatModel, thinking: o.thinking },
   };
 }
 
@@ -47,15 +58,27 @@ export function setModel(key: ModelKey, value: string | undefined): ModelSetting
   const o = readOverrides();
   if (value === undefined || value === "") delete o[key];
   else o[key] = value;
-  fs.mkdirSync(path.dirname(file()), { recursive: true });
-  fs.writeFileSync(file(), JSON.stringify(o, null, 2));
+  writeOverrides(o);
   return getModels();
 }
 
 export function resetModels(): void {
-  try {
-    fs.unlinkSync(file());
-  } catch {
-    /* none */
-  }
+  const o = readOverrides();
+  for (const k of MODEL_KEYS) delete o[k];
+  writeOverrides(o);
+}
+
+/** Minutes of play per coin: the dashboard override, else COIN_SESSION_MINUTES. */
+export function getSessionMinutes(): number {
+  const o = readOverrides();
+  const n = Number(o.sessionMinutes);
+  return Number.isFinite(n) && n > 0 ? n : getConfig().coins.sessionMinutes;
+}
+
+export function setSessionMinutes(minutes: number | undefined): number {
+  const o = readOverrides();
+  if (minutes === undefined || !Number.isFinite(minutes) || minutes <= 0) delete o.sessionMinutes;
+  else o.sessionMinutes = Math.round(minutes * 100) / 100;
+  writeOverrides(o);
+  return getSessionMinutes();
 }

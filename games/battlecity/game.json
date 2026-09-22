@@ -1,7 +1,6 @@
 {
   "id": "battlecity",
   "title": "Battle City",
-  "titleLocal": "坦克大战",
   "system": "nes",
   "genre": "tank",
   "rom": "battlecity.nes",

@@ -8,14 +8,18 @@ import { logger } from "../log.js";
 import { BuddyBrain, type BuddyMessage } from "../ai/player.js";
 import { jevEnabled } from "../ai/jev.js";
 import { getGame, playableGames, publicGame, romPath, type GameProfile } from "../games/registry.js";
-import { closeSession, findCode, listCodes, mintCode, remaining, spendCoin } from "../coins/store.js";
-import { getModels } from "../runtimeConfig.js";
+import { activeWindow, closeSession, findCode, listCodes, mintCode, remaining, spendCoin } from "../coins/store.js";
+import { listJobs } from "../jobs/store.js";
+import { getModels, getSessionMinutes, setSessionMinutes } from "../runtimeConfig.js";
 import { dashboardHtml } from "./dashboard.js";
+import { relaySpend } from "./spend.js";
 
 const log = logger("http");
 
 interface PlaySession {
   id: string;
+  /** The coin window this browser session belongs to (one window can be re-entered several times). */
+  windowId: string;
   token: string;
   code: string;
   game: GameProfile;
@@ -29,6 +33,8 @@ interface PlaySession {
 }
 
 const sessions = new Map<string, PlaySession>();
+/** Sessions this process has opened since start (for the dashboard). */
+let sessionsOpened = 0;
 
 const MIME: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
@@ -71,11 +77,17 @@ function isLoopback(req: http.IncomingMessage): boolean {
   return a === "127.0.0.1" || a === "::1" || a === "::ffff:127.0.0.1";
 }
 
+/** Operator check: the bearer token; without a configured token only loopback callers (never behind nginx). */
 function isAdmin(req: http.IncomingMessage): boolean {
   const token = getConfig().http.adminToken;
   const auth = req.headers.authorization ?? "";
-  if (token && auth === `Bearer ${token}`) return true;
-  return !token && isLoopback(req);
+  if (token) {
+    const given = auth.startsWith("Bearer ") ? auth.slice(7) : "";
+    const a = Buffer.from(given);
+    const b = Buffer.from(token);
+    return a.length === b.length && crypto.timingSafeEqual(a, b);
+  }
+  return isLoopback(req);
 }
 
 function serveStatic(res: http.ServerResponse, file: string): void {
@@ -96,7 +108,8 @@ function endSession(s: PlaySession, reason: string): void {
   s.ended = reason;
   clearTimeout(s.timer);
   s.brain?.stop();
-  closeSession(s.code, s.id, reason);
+  // A takeover only replaces the browser session; the coin window itself keeps running untouched.
+  if (reason !== "resumed in another tab") closeSession(s.code, s.windowId, reason);
   try {
     s.ws?.send(JSON.stringify({ type: "expired", reason }));
   } catch {
@@ -110,12 +123,26 @@ function sessionPublic(s: PlaySession) {
   const code = findCode(s.code);
   return {
     sessionId: s.id,
+    windowId: s.windowId,
     token: s.token,
     game: publicGame(s.game),
     startedAt: new Date(s.startedAt).toISOString(),
     expiresAt: new Date(s.expiresAt).toISOString(),
     remaining: code ? remaining(code) : 0,
     ended: s.ended ?? null,
+  };
+}
+
+/** What the play page needs to know about a code: balance plus the window that is still running. */
+function codePublic(code: NonNullable<ReturnType<typeof findCode>>) {
+  const running = activeWindow(code);
+  return {
+    code: code.code,
+    coins: code.coins,
+    used: code.used,
+    remaining: remaining(code),
+    sessionMinutes: getSessionMinutes(),
+    active: running ? { gameId: running.gameId, expiresAt: running.expiresAt, secondsLeft: Math.max(0, Math.round((Date.parse(running.expiresAt!) - Date.now()) / 1000)) } : null,
   };
 }
 
@@ -127,7 +154,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     return;
   }
   if (req.method === "GET" && p === "/api/games") {
-    json(res, 200, { games: playableGames().map(publicGame), sessionMinutes: cfg.coins.sessionMinutes, observeHz: cfg.ai.observeHz });
+    json(res, 200, { games: playableGames().map(publicGame), sessionMinutes: getSessionMinutes(), observeHz: cfg.ai.observeHz });
     return;
   }
   if (req.method === "POST" && p === "/api/redeem") {
@@ -137,7 +164,7 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       json(res, 404, { error: "unknown code" });
       return;
     }
-    json(res, 200, { code: code.code, coins: code.coins, used: code.used, remaining: remaining(code), sessionMinutes: cfg.coins.sessionMinutes });
+    json(res, 200, codePublic(code));
     return;
   }
   if (req.method === "POST" && p === "/api/sessions") {
@@ -149,24 +176,29 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     }
     const spent = spendCoin(String(body.code ?? ""), game.id);
     if (!spent) {
-      json(res, 402, { error: "no coins left on this code" });
+      json(res, 402, { error: findCode(String(body.code ?? "")) ? "no coins left on this code" : "unknown code" });
       return;
     }
+    // One window, one live browser session: a second tab (or a second person with the code) takes over.
+    for (const other of sessions.values()) if (!other.ended && other.windowId === spent.window.id) endSession(other, "resumed in another tab");
     const token = crypto.randomBytes(16).toString("hex");
     const startedAt = Date.now();
+    const expiresAt = Date.parse(spent.window.expiresAt!);
     const s: PlaySession = {
-      id: spent.sessionId,
+      id: crypto.randomBytes(8).toString("hex"),
+      windowId: spent.window.id,
       token,
       code: spent.code.code,
       game,
       startedAt,
-      expiresAt: startedAt + cfg.coins.sessionMinutes * 60_000,
+      expiresAt,
       lang: String(body.lang ?? "en"),
-      timer: setTimeout(() => endSession(s, "time is up"), cfg.coins.sessionMinutes * 60_000),
+      timer: setTimeout(() => endSession(s, "time is up"), Math.max(1000, expiresAt - startedAt)),
     };
     sessions.set(token, s);
-    log.info(`session ${s.id} started: ${game.id}, code ${spent.code.code} (${remaining(spent.code)} coins left)`);
-    json(res, 200, sessionPublic(s));
+    sessionsOpened++;
+    log.info(`session ${s.id} ${spent.resumed ? "resumed" : "started"}: ${game.id}, code ${spent.code.code}, window ${spent.window.id} until ${spent.window.expiresAt} (${remaining(spent.code)} coins left)`);
+    json(res, 200, { ...sessionPublic(s), resumed: spent.resumed });
     return;
   }
   const m = /^\/api\/sessions\/([a-f0-9]+)(?:\/(end))?$/.exec(p);
@@ -198,18 +230,68 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       json(res, 401, { error: "admin token required" });
       return;
     }
+    if (req.method === "GET" && p === "/api/admin/overview") {
+      const codes = listCodes();
+      const jobs = listJobs();
+      const now = Date.now();
+      const dayAgo = now - 86_400_000;
+      const paid = jobs.filter((j) => j.status === "delivered" || j.status === "settled");
+      const revenue = paid.reduce((a, j) => a + (Number(j.price) || 0), 0);
+      const windows = codes.flatMap((c) => c.sessions.map((w) => ({ ...w, code: c.code })));
+      json(res, 200, {
+        now: new Date(now).toISOString(),
+        spend: await relaySpend(),
+        settings: { sessionMinutes: getSessionMinutes(), defaultSessionMinutes: cfg.coins.sessionMinutes, coinsPerDollar: cfg.coins.perDollar, price: cfg.service.price, currency: cfg.service.currency },
+        models: { coach: getModels().coachModel, chat: getModels().chatModel, jev: jevEnabled() ? cfg.typesafe.model : null, relay: cfg.relay.baseUrl },
+        games: playableGames().map((g) => g.id),
+        hosting: { enabled: Boolean(cfg.termix.agentId && cfg.termix.hasWalletKey), agentId: cfg.termix.agentId || null, chain: cfg.termix.chain },
+        urls: { api: cfg.http.publicBaseUrl, play: cfg.http.playBaseUrl },
+        coins: {
+          codes: codes.length,
+          minted: codes.reduce((a, c) => a + c.coins, 0),
+          used: codes.reduce((a, c) => a + c.used, 0),
+          usedToday: windows.filter((w) => Date.parse(w.startedAt) > dayAgo).length,
+          activeWindows: windows.filter((w) => w.expiresAt && w.reason !== "time is up" && Date.parse(w.expiresAt) > now).length,
+        },
+        orders: { total: jobs.length, paid: paid.length, failed: jobs.filter((j) => j.status === "failed").length, revenue, currency: cfg.service.currency },
+        sessions: { live: [...sessions.values()].filter((s) => !s.ended).length, openedSinceStart: sessionsOpened },
+      });
+      return;
+    }
+    if (req.method === "GET" && p === "/api/admin/settings") {
+      json(res, 200, { sessionMinutes: getSessionMinutes(), defaultSessionMinutes: cfg.coins.sessionMinutes });
+      return;
+    }
+    if (req.method === "POST" && p === "/api/admin/settings") {
+      const body = await readBody(req);
+      if ("sessionMinutes" in body) {
+        const v = body.sessionMinutes === null || body.sessionMinutes === "" ? undefined : Number(body.sessionMinutes);
+        if (v !== undefined && (!Number.isFinite(v) || v < 1 || v > 24 * 60)) {
+          json(res, 400, { error: "sessionMinutes must be between 1 and 1440" });
+          return;
+        }
+        const minutes = setSessionMinutes(v);
+        log.info(`operator set session minutes to ${minutes}${v === undefined ? " (env default)" : ""}`);
+      }
+      json(res, 200, { sessionMinutes: getSessionMinutes(), defaultSessionMinutes: cfg.coins.sessionMinutes });
+      return;
+    }
     if (req.method === "GET" && p === "/api/admin/codes") {
-      json(res, 200, { codes: listCodes().map((c) => ({ ...c, remaining: remaining(c) })) });
+      json(res, 200, { codes: listCodes().map((c) => ({ ...c, remaining: remaining(c), active: activeWindow(c)?.expiresAt ?? null })) });
       return;
     }
     if (req.method === "POST" && p === "/api/admin/codes") {
       const body = await readBody(req);
       const rec = mintCode(Number(body.coins ?? 1), { orderId: "local", note: String(body.note ?? "minted by operator") });
-      json(res, 200, { code: rec.code, coins: rec.coins, playUrl: `${cfg.http.publicBaseUrl}/?code=${rec.code}` });
+      json(res, 200, { code: rec.code, coins: rec.coins, playUrl: `${cfg.http.playBaseUrl}/?code=${rec.code}` });
       return;
     }
     if (req.method === "GET" && p === "/api/admin/sessions") {
       json(res, 200, { sessions: [...sessions.values()].map(sessionPublic) });
+      return;
+    }
+    if (req.method === "GET" && p === "/api/admin/orders") {
+      json(res, 200, { orders: listJobs().slice(0, 200) });
       return;
     }
   }
@@ -259,6 +341,8 @@ function attachWs(s: PlaySession, ws: WebSocket): void {
 
 export function startHttpServer(): http.Server {
   const cfg = getConfig();
+  // The play page is hosted elsewhere (Vercel) when PLAY_BASE_URL differs: this server is then API + WebSocket only.
+  const pageOffOrigin = cfg.http.playBaseUrl !== cfg.http.publicBaseUrl;
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? "/", "http://x");
     if (url.pathname.startsWith("/api/")) {
@@ -283,13 +367,19 @@ export function startHttpServer(): http.Server {
       return;
     }
     if (url.pathname === cfg.http.adminPath || url.pathname === cfg.http.adminPath + "/") {
-      if (!isAdmin(req)) {
-        res.writeHead(401, { "content-type": "text/plain" });
-        res.end("admin token required (Authorization: Bearer <ADMIN_TOKEN>)");
+      // The page itself carries no secrets: it asks for the token and sends it as a bearer to /api/admin/*.
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "x-robots-tag": "noindex" });
+      res.end(dashboardHtml());
+      return;
+    }
+    if (pageOffOrigin) {
+      if (url.pathname === "/" || url.pathname === "/play" || url.pathname === "/index.html") {
+        res.writeHead(302, { location: `${cfg.http.playBaseUrl}/${url.search}`, "cache-control": "no-store" });
+        res.end();
         return;
       }
-      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-      res.end(dashboardHtml());
+      res.writeHead(404, { "content-type": "text/plain" });
+      res.end("not found");
       return;
     }
     let rel = url.pathname === "/" || url.pathname === "/play" ? "/index.html" : url.pathname;
@@ -320,7 +410,7 @@ export function startHttpServer(): http.Server {
   });
 
   server.listen(cfg.http.port, cfg.http.host, () => {
-    log.info(`play page at ${cfg.http.publicBaseUrl}/  (operator dashboard: ${cfg.http.adminPath})`);
+    log.info(`api at ${cfg.http.publicBaseUrl}/  play page: ${cfg.http.playBaseUrl}/${pageOffOrigin ? " (off-origin)" : ""}  operator dashboard: ${cfg.http.adminPath}`);
   });
   return server;
 }

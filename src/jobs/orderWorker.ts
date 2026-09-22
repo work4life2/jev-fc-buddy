@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { getConfig } from "../config.js";
+import { getSessionMinutes } from "../runtimeConfig.js";
 import { logger } from "../log.js";
 import { notify } from "../notify.js";
 import { sleep } from "../util/exec.js";
@@ -92,17 +93,17 @@ async function acceptOrder(job: Job, order: Order): Promise<Order> {
 export function deliveryText(code: CoinCode): string {
   const cfg = getConfig();
   const games = playableGames()
-    .map((g) => `${g.title}${g.titleLocal ? ` (${g.titleLocal})` : ""}`)
+    .map((g) => g.title)
     .join(", ");
   return [
     `🎮 Your AI co-op buddy is ready.`,
     ``,
     `Coin code: ${code.code}`,
-    `Coins: ${code.coins} (1 coin = one play session of up to ${cfg.coins.sessionMinutes} minutes)`,
+    `Coins: ${code.coins} (1 coin = ${getSessionMinutes()} minutes of play; you can leave and come back while the clock runs)`,
     ``,
-    `Play here: ${cfg.http.publicBaseUrl}/?code=${code.code}`,
+    `Play here: ${cfg.http.playBaseUrl}/?code=${code.code}`,
     ``,
-    `How it works: open the link in a desktop browser, enter the code, pick a game (${games}) and press Insert Coin. You are player 1 (keyboard: arrows, Z = jump, X = fire, Enter = start; or plug in any gamepad). The AI is player 2: it follows you, covers you and shoots what threatens you. Its every input and its live commentary scroll on the right side of the screen.`,
+    `How it works: open the link in a desktop browser, enter the code, pick a game (${games}) and press Insert Coin. You are player 1 (keyboard: WASD or arrows to move, J = fire, K = jump, Enter = start; or plug in any gamepad). The AI is player 2: it follows you, covers you and shoots what threatens you. Its every input and its live commentary scroll on the right side of the screen.`,
     ``,
     `The code works as many times as it has coins. Keep it private — anyone with the code can spend the coins.`,
   ].join("\n");

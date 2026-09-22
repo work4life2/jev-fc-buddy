@@ -48,7 +48,6 @@ export interface TankProfile {
 export interface GameProfile {
   id: string;
   title: string;
-  titleLocal?: string;
   system: "nes";
   genre?: Genre;
   rom: string;
@@ -154,7 +153,6 @@ export function publicGame(g: GameProfile) {
   return {
     id: g.id,
     title: g.title,
-    titleLocal: g.titleLocal,
     system: g.system,
     genre: genreOf(g),
     screen: g.screen,

@@ -34,12 +34,21 @@ The backend runs on the same Linode box as 3dcardagent (`~/code/3dcardagent`, me
   (`deploy/nginx.conf` = :80 ACME + redirect, `deploy/nginx-tls.conf` = :443, no buffering on `/ws`).
   To move to a real domain: change `PUBLIC_BASE_URL` in `.env.local`, run `certbot certonly --webroot -w /var/www/certbot -d <host>`,
   then `deploy/deploy.sh --force`.
-- Play page: the server serves `web/` itself, so `https://fc.172.104.55.67.sslip.io/?code=…` works as-is. If the
-  page is hosted on Vercel instead, deploy `web/` there with `config.js` setting `window.JEV_API_BASE` to the
-  server URL and add the Vercel origin to `ALLOWED_ORIGINS` on the server (CORS for `/api/*`; `/ws` has no origin check).
+- Play page: hosted on Vercel at `https://jev-fc-buddy.vercel.app` (project `jev-fc-buddy` in the `zk1s-projects`
+  scope, Git-connected to `work4life2/jev-fc-buddy`, so a push to main deploys it too; `vercel.json` in the repo is the
+  build config, `web/config.js` is generated at build with the API host). The server has `PLAY_BASE_URL` set to the
+  Vercel URL and `ALLOWED_ORIGINS` containing it: it redirects `/` there and serves only `/api/*`, `/ws` and the operator page.
+  Old play links to the sslip host keep working through the redirect (the `?code=` query is preserved).
+- Operator dashboard: `https://fc.172.104.55.67.sslip.io` + `pass/admin-path.txt`; paste `pass/admin-token.txt` into the
+  sign-in box once (stored in that browser). Shows OpenRouter key spend (today / week / month / all-time, credits left),
+  revenue from Termix orders, coins, live sessions, and lets you change minutes per coin (runtime override in
+  `data/runtime-config.json`, new coins only) and mint codes.
 - Shares the box with holo-card-agent (`:8787`, nginx default server on :80). Its Blender renders saturate both cores
   for minutes; this unit has `CPUWeight=300` so game ticks win that contest. Disk: holo prunes old orders itself;
   this service writes only small JSON + logs under `data/`.
-- Termix hosting is **not enabled yet**: `.env.local` has no `WALLET_KEY` / `A2A_AGENT_ID`, so `serve` runs the play
-  server only (codes minted with `npm run code -- mint N` as `jevbuddy`). To sell: put a hot-wallet key in
-  `.env.local`, `npm run setup -- mint …` / `agents` / `listing`, set `A2A_AGENT_ID`, restart. Only one host per agent id.
+- Termix hosting is **enabled** (2026-09-22): `.env.local` on the server has `WALLET_KEY` (hot wallet
+  `0xf8a14ce6…61a7a`, chain bsc) and `A2A_AGENT_ID=cmuc7o7r0jcryzw01qxthkyw5` (GameBuddy.agent, token #355860), so
+  `serve` runs the play server + hosting loop and every funded order becomes a code. Only one host per agent id: do
+  not run `npm start` with the same agent id elsewhere. The listing (1 USDC per coin, instant-buyable) was published
+  with `npm run setup -- listing data/listing/cover.png`; edit it with `--update <listingId>`.
+- Language: everything buyer-facing (page, delivery text, chat replies, coach commentary, listing) is English only.

@@ -7,14 +7,15 @@ An **AI teammate for classic NES co-op games**, played in the browser and sold a
 - Decision model: [TypeSafe Jev](https://typesafe.ai) (System One) — typed, probability-backed action choices several times a second (`skills/typesafe-ai`). OpenRouter serves Jev on the same key through its System One endpoint (`/api/v1/systemone`, beta)
 - Marketplace: [termix-agent-skills](https://termix.ai/skills?v=1.8.0) v1.8.0 — hosting, orders, delivery, settlement (`skills/termix-agent-skills`, vendored unchanged)
 - Emulator: [jsnes](https://github.com/bfirsh/jsnes) in the player's browser; the server never streams video
-- Games: Contra (魂斗罗, run-and-gun) and Battle City (坦克大战, top-down tanks). Games are plug-in profiles under `games/<id>/`; nothing outside that folder is title-specific. Each profile names a `genre` that selects the reflex policy: `run-and-gun` (follow / cover / jump / prone) or `tank` (lanes, shells, a base to protect)
+- Games: Contra (run-and-gun) and Battle City (top-down tanks). Games are plug-in profiles under `games/<id>/`; nothing outside that folder is title-specific. Each profile names a `genre` that selects the reflex policy: `run-and-gun` (follow / cover / jump / prone) or `tank` (lanes, shells, a base to protect)
 
 ## How it works
 
 ```
 buyer buys N USDC on Termix ──▶ hosting loop: accept (on-chain) ──▶ mint code worth N coins ──▶ deliver code + play URL
                                                                                                │
-player opens /?code=FC-…  ──▶ redeem ──▶ Insert coin (1 coin = one session, COIN_SESSION_MINUTES) ──▶ browser loads ROM
+player opens /?code=FC-…  ──▶ redeem ──▶ Insert coin (1 coin = one timed window, COIN_SESSION_MINUTES) ──▶ browser loads ROM
+        │                                 leaving and coming back inside the window is free (now − insert time < minutes)
         │
         ├─ browser: jsnes runs the game · P1 = keyboard / gamepad · P2 = the AI · reports RAM 12×/s over WebSocket
         │
@@ -61,8 +62,18 @@ npm run code -- mint 3               # prints FC-XXXX-XXXX-XXXX and the play URL
 npm run serve -- --local             # http://localhost:8790/?code=FC-...
 ```
 
-Operator dashboard (codes, live sessions, one-click mint): `http://localhost:8790/admin` (loopback, or
-`Authorization: Bearer $ADMIN_TOKEN`).
+Operator dashboard (relay spend, revenue, coins, live sessions, minutes per coin, one-click mint):
+`http://localhost:8790/admin` (or `ADMIN_PATH`). It asks for `ADMIN_TOKEN` once and keeps it in the browser;
+with no token configured only loopback callers are admins.
+
+### Coins and play windows
+
+One coin opens a play window of `COIN_SESSION_MINUTES` (default 10; the dashboard can change it at runtime,
+new coins only). The clock starts when the coin is inserted and keeps running whether or not the page is
+open, so a player can quit and come back with the same code for free while the window lasts. Only one
+browser session per window can run at a time: inserting the code elsewhere takes over. When the window
+ends the next Insert coin spends the next coin; a code with no coins left is refused. `/api/redeem`,
+`/api/sessions` and `/api/admin/*` are rate-limited per IP by nginx in production.
 
 Headless end-to-end check (runs jsnes in Node, opens a session, streams RAM, applies the AI's inputs):
 
@@ -98,7 +109,7 @@ npm start                            # play server + hosting loop
 ```
 
 Every funded order becomes one code worth `floor(price × COINS_PER_DOLLAR)` coins (1 $ = 1 coin by
-default). The code and the play URL (`PUBLIC_BASE_URL/?code=…`) are uploaded as the delivery
+default). The code and the play URL (`PLAY_BASE_URL/?code=…`) are uploaded as the delivery
 artifact, submitted on-chain and posted in the order conversation. Buyer chat is answered by the
 pi chat session. Orders are re-swept every `SWEEP_INTERVAL_SECONDS`; delivered orders whose challenge
 window elapsed are claimed automatically. Jobs are persisted in `data/jobs/`, codes in `data/coins.json`.
@@ -114,6 +125,14 @@ ssh root@host 'curl -fsSL https://raw.githubusercontent.com/work4life2/jev-fc-bu
 ```
 
 After that, `git push` is the deploy. See AGENTS.md → Production for the live server.
+
+### Play page on Vercel
+
+The repo's `vercel.json` builds only the static page: `npm run build:web` copies jsnes into `web/vendor`
+and writes `web/config.js` with `JEV_API_BASE` (the build command defaults it to the production API
+host; set the `JEV_API_BASE` environment variable in the Vercel project to override). Output directory is
+`web`. On the server set `PLAY_BASE_URL=https://<vercel host>` and add that origin to `ALLOWED_ORIGINS`;
+the server then redirects `/` there and serves only `/api/*`, `/ws` and the operator page.
 
 ## Models
 
@@ -146,14 +165,15 @@ when neither has what you need, run the ROM in jsnes under Node and diff RAM whi
 
 ```
 src/index.ts           CLI: serve · code · setup · model · doctor · jobs · pi
-src/server/http.ts     play page, REST (/api/redeem, /api/sessions, /api/games/:id/rom), WebSocket, /admin
+src/server/http.ts     REST (/api/redeem, /api/sessions, /api/games/:id/rom, /api/admin/*), WebSocket, static page or redirect
+src/server/dashboard.ts operator dashboard page · src/server/spend.ts relay (OpenRouter) key spend
 src/ai/observe.ts      RAM bytes → game-agnostic observation (via the game profile)
 src/ai/policy.ts       reflex policy (run-and-gun): intent → held buttons
 src/ai/tankPolicy.ts   reflex policy (tank): shells, lanes, path finding, base protection
 src/ai/jev.ts          TypeSafe Jev: typed Choice / Noul questions over the observation
 src/ai/coach.ts        pi session: plan + commentary
 src/ai/player.ts       the brain: reflex ⟷ Jev ⟷ coach, ops stream
-src/coins/store.ts     coin codes (data/coins.json)
+src/coins/store.ts     coin codes and play windows (data/coins.json) · src/runtimeConfig.ts runtime overrides (models, minutes per coin)
 src/termix/, src/hosting/, src/jobs/   marketplace: hosting loop, orders → codes → delivery, buyer chat
 games/<id>/game.json   game profiles          web/   play page (vanilla JS + jsnes)
 skills/                termix-agent-skills, typesafe-ai (vendored)

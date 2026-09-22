@@ -63,12 +63,22 @@ export interface Config {
   coins: {
     /** Coins minted per 1 unit of order currency (USD/USDC). */
     perDollar: number;
-    /** One coin buys this many minutes of play (a session also ends on game over). */
+    /** Default minutes of play per coin (the dashboard can override it at runtime). */
     sessionMinutes: number;
     codePrefix: string;
   };
   termix: { chain: string; agentId: string; hasWalletKey: boolean; rpcUrl: string };
-  http: { port: number; host: string; publicBaseUrl: string; adminToken: string; adminPath: string; allowedOrigins: string[] };
+  http: {
+    port: number;
+    host: string;
+    /** Public URL of this API server (nginx front). */
+    publicBaseUrl: string;
+    /** Public URL of the play page (Vercel); equals publicBaseUrl when the server serves web/ itself. */
+    playBaseUrl: string;
+    adminToken: string;
+    adminPath: string;
+    allowedOrigins: string[];
+  };
   jobs: { sweepIntervalSeconds: number; notifyWebhook: string };
   service: { title: string; price: string; currency: string; deliveryDays: number; category: string; skillTag: string };
 }
@@ -116,7 +126,7 @@ export function getConfig(): Config {
     },
     coins: {
       perDollar: envNum("COINS_PER_DOLLAR", 1),
-      sessionMinutes: envNum("COIN_SESSION_MINUTES", 30),
+      sessionMinutes: envNum("COIN_SESSION_MINUTES", 10),
       codePrefix: env("COIN_CODE_PREFIX", "FC"),
     },
     termix: {
@@ -129,6 +139,7 @@ export function getConfig(): Config {
       port,
       host: env("HTTP_HOST", "0.0.0.0"),
       publicBaseUrl: env("PUBLIC_BASE_URL", `http://localhost:${port}`).replace(/\/+$/, ""),
+      playBaseUrl: env("PLAY_BASE_URL", env("PUBLIC_BASE_URL", `http://localhost:${port}`)).replace(/\/+$/, ""),
       adminToken: env("ADMIN_TOKEN"),
       // Where the operator page is served (default /admin); set a random path in production.
       adminPath: "/" + env("ADMIN_PATH", "/admin").replace(/^\/+|\/+$/g, ""),
