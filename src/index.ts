@@ -19,6 +19,8 @@ Usage:
   jev-fc-buddy doctor [--no-network]  check environment and configuration
   jev-fc-buddy jobs                   list Termix orders handled
   jev-fc-buddy pi [args...]           interactive pi with the termix + typesafe skills loaded
+  jev-fc-buddy train run|learn|sweep|show [--game id] [--episodes N] [--seed N] [--duo] [--jev] [--learn] [--param k=v1,v2 --apply]
+                                      self-play in a headless emulator; learns pits / kill zones / platforms into games/<id>/learned.json
 `);
   process.exit(2);
 }
@@ -135,6 +137,11 @@ async function main() {
       const { listJobs } = await import("./jobs/store.js");
       for (const j of listJobs()) process.stdout.write(`${j.id.padEnd(40)} ${j.status.padEnd(11)} ${j.code ?? "-"}  ${j.updatedAt}${j.error ? "  ✗ " + j.error.slice(0, 80) : ""}\n`);
       break;
+    }
+    case "train": {
+      const { trainCli } = await import("./train/cli.js");
+      await trainCli(rest);
+      return;
     }
     case "pi": {
       const bin = path.join(ROOT, "node_modules", ".bin", "pi");

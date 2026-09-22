@@ -11,6 +11,10 @@ coin codes on the Termix agent marketplace.
   https://docs.typesafe.ai/llms.txt before changing the questions.
 - `games/<id>/game.json` — one profile per game: ROM name, RAM addresses, phases, 2-player start
   procedure, reflex parameters, game brief. Nothing outside `games/` may mention a specific title.
+  `games/<id>/learned.json` is written by `node dist/index.js train run --rounds N` (self-play in a
+  headless jsnes, see README → Self-play training): pits, kill zones, platforms, failed jumps. It is
+  committed and deploys with the code; rerun training after changing `src/ai/policy.ts` and check the
+  deaths-per-1000px number did not go up. Reports go to `data/train/` (git-ignored).
 - `roms/` — ROM files (git-ignored). `web/` — the play page (vanilla JS + jsnes). `src/` — server.
 - Never write into `skills/`; test data goes under `data/`.
 

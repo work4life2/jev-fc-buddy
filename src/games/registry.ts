@@ -102,6 +102,45 @@ export interface GameProfile {
   /** Present for genre "tank". */
   tank?: TankProfile;
   coachBrief: string;
+  /** Self-play knowledge (games/<id>/learned.json), merged in by the registry when present. */
+  learned?: Learned;
+}
+
+/** A place where the buddy died more than once during self-play (level-x range, screen-y range). */
+export interface KillZone {
+  x1: number;
+  x2: number;
+  yMin: number;
+  yMax: number;
+  cause: "shot" | "contact";
+  /** Where the killer was relative to the buddy. */
+  from: "above" | "level" | "below" | "behind";
+  count: number;
+  /** Average frames the buddy had been standing still when it died here. */
+  still: number;
+  /** One sentence for Jev's state. */
+  advice: string;
+}
+
+export interface LearnedLevel {
+  deaths: number;
+  /** [x1, x2, yMin, yMax, kind, falls]: drops the buddy fell into; same shape as terrain.gaps plus the count. */
+  pits: Array<[number, number, number, number, "pit" | "hop", number]>;
+  killZones: KillZone[];
+  /** [x1, x2, y]: ground the buddy has stood on. */
+  platforms: Array<[number, number, number]>;
+  /** [x1, x2, fromY, targetY, count]: jumps from here toward that height that never arrived (cliff faces). */
+  badJumps?: Array<[number, number, number, number, number]>;
+}
+
+/** games/<id>/learned.json, written by `jev-fc-buddy train`. */
+export interface Learned {
+  version: 1;
+  updatedAt: string;
+  episodes: number;
+  levels: Record<string, LearnedLevel>;
+  /** Reflex parameter overrides found by `train sweep`. */
+  params: Partial<GameProfile["reflex"]>;
 }
 
 export function genreOf(g: GameProfile): Genre {
@@ -122,6 +161,16 @@ export function listGames(): GameProfile[] {
     try {
       const profile = JSON.parse(fs.readFileSync(file, "utf8")) as GameProfile;
       profile.id ||= entry.name;
+      const learnedFile = path.join(dir, entry.name, "learned.json");
+      if (fs.existsSync(learnedFile)) {
+        try {
+          profile.learned = JSON.parse(fs.readFileSync(learnedFile, "utf8")) as Learned;
+          // Swept reflex parameters override the hand-written defaults.
+          profile.reflex = { ...profile.reflex, ...(profile.learned.params ?? {}) };
+        } catch (err) {
+          log.warn(`ignoring ${learnedFile}: ${String(err)}`);
+        }
+      }
       cache.set(profile.id, profile);
     } catch (err) {
       log.warn(`skipping ${file}: ${String(err)}`);
@@ -133,6 +182,11 @@ export function listGames(): GameProfile[] {
 export function getGame(id: string): GameProfile | undefined {
   listGames();
   return cache?.get(id);
+}
+
+/** Forget the cached profiles (after learned.json changed). */
+export function reloadGames(): void {
+  cache = undefined;
 }
 
 export function romPath(game: GameProfile): string {

@@ -84,6 +84,42 @@ node scripts/headless-play.mjs --seconds 60 --game battlecity    # a specific on
 
 Adding `&auto=1` to a play URL spends a coin on page load (testing aid).
 
+### Self-play training
+
+The buddy can train alone before it plays with anyone. `train` runs the game in jsnes inside the
+server process (about 10× real time, virtual clock), drives the same `BuddyBrain` the play server
+uses, and records every death (cause, position, what the buddy was doing), every jump it attempted
+and every piece of ground it stood on. `learn` folds the reports into `games/<id>/learned.json`:
+
+- **pits** — edges the buddy walked or jumped off and died (with the height they apply to),
+- **kill zones** — where it was shot or run over repeatedly, from which direction, and the lesson,
+- **platforms** — the ground map, so it knows where a ledge ends and which ledge a jump reaches,
+- **bad jumps** — ledges it tried to jump onto and never arrived (cliff faces).
+
+The reflex policy reads that file on the next start (never walk off a known edge, jump to a known
+platform from the right spot, never stand still in a kill zone) and Jev gets the nearby zones and the
+ledge ahead in its state. What the buddy learns alone is what it plays with next to a human.
+
+```bash
+node dist/index.js train run --episodes 6 --rounds 4     # play, learn, reload, repeat (reflex only, fast)
+node dist/index.js train run --episodes 3 --duo          # with a scripted partner (runs right and fires)
+node dist/index.js train run --episodes 1 --jev          # real-time pacing, Jev asked as in production
+node dist/index.js train show                            # what learned.json knows
+node dist/index.js train sweep --param dodgeDistance=48,64,80,96 --episodes 6 --apply
+```
+
+The score is deaths per 1000 px of progress (lower is better) plus mean progress; `stuck@x` marks an
+episode that stopped making progress for 30 s (a dead end it refuses to jump into). Reports live in
+`data/train/<game>/`. On Contra level 1 the untouched policy died 7 times per 1000 px and never got past
+x≈300; after the rules below and four training rounds it dies about 0.3 times per 1000 px and reaches x≈2300.
+
+The survival rules that came out of the logs, in priority order: enemy shots are aimed at where the
+buddy stands, so it never stands still within reach of a shooter on another height (it runs past, not
+back and forth); a projectile is dodged by its predicted path — prone for a level shot at body height,
+a late jump for a level shot at foot height, a sidestep for rising or diving shots (prone puts the body
+into a rising shot, a jump into a diving one); a jump is never started while other bullets are in the
+air; edges and pits come next; only then covering the partner (hostiles near them first) and progress.
+
 ### Controls
 
 | NES | Keyboard | Gamepad (default = standard mapping) |
@@ -174,6 +210,7 @@ src/ai/policy.ts       reflex policy (run-and-gun): intent → held buttons
 src/ai/tankPolicy.ts   reflex policy (tank): shells, lanes, path finding, base protection
 src/ai/jev.ts          TypeSafe Jev: typed Choice / Noul questions over the observation
 src/ai/player.ts       the brain: reflex ⟷ Jev, ops stream
+src/train/             self-play: harness.ts (headless episodes) · learn.ts (→ games/<id>/learned.json) · cli.ts (`train`)
 src/coins/store.ts     coin codes and play windows (data/coins.json) · src/runtimeConfig.ts runtime overrides (models, minutes per coin)
 src/termix/, src/hosting/, src/jobs/   marketplace: hosting loop, orders → codes → delivery, buyer chat
 games/<id>/game.json   game profiles          web/   play page (vanilla JS + jsnes)

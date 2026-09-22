@@ -1,9 +1,9 @@
 import { getConfig } from "../config.js";
 import { logger } from "../log.js";
 import { genreOf, type GameProfile } from "../games/registry.js";
-import { jevDecide, jevEnabled, type JevAction, type JevDecision } from "./jev.js";
+import { dangersNear, jevDecide, jevEnabled, type JevAction, type JevDecision } from "./jev.js";
 import { observe, type Observation } from "./observe.js";
-import { actionFor, gapAhead, heuristicIntent, IDLE, newMemory, respawnSteer, sameAction, survivalIntent, type Action, type Button, type Intent, type PolicyMemory } from "./policy.js";
+import { actionFor, edgeAhead, gapAhead, heuristicIntent, IDLE, newMemory, respawnSteer, sameAction, survivalIntent, type Action, type Button, type Intent, type PolicyMemory } from "./policy.js";
 import { newTankMemory, TANK_INTENTS, tankDecide, type TankIntent, type TankMemory } from "./tankPolicy.js";
 
 const log = logger("buddy");
@@ -19,6 +19,10 @@ export type BuddyMessage =
 export interface BrainOptions {
   game: GameProfile;
   send: (m: BuddyMessage) => void;
+  /** Ask Jev (default: whenever a key is configured). The self-play harness turns it off for fast runs. */
+  jev?: boolean;
+  /** Do not write deaths to the log file (self-play). */
+  quiet?: boolean;
 }
 
 /**
@@ -45,13 +49,17 @@ export class BuddyBrain {
   private lastObsAt = 0;
   private playMs = 0;
   private lastPhase = "";
+  private readonly useJev: boolean;
+  private readonly quiet: boolean;
 
   constructor(o: BrainOptions) {
     this.game = o.game;
     this.tank = genreOf(o.game) === "tank";
     this.send = o.send;
-    this.send({ type: "status", jev: jevEnabled(), phase: "boot" });
-    this.op("system", jevEnabled() ? `Jev online (${getConfig().typesafe.model}${getConfig().typesafe.viaRelay ? " via relay" : ""})` : "Jev offline (no relay/TypeSafe key): reflex policy only");
+    this.useJev = (o.jev ?? true) && jevEnabled();
+    this.quiet = o.quiet ?? false;
+    this.send({ type: "status", jev: this.useJev, phase: "boot" });
+    this.op("system", this.useJev ? `Jev online (${getConfig().typesafe.model}${getConfig().typesafe.viaRelay ? " via relay" : ""})` : "Jev offline (no relay/TypeSafe key): reflex policy only");
   }
 
   private op(src: OpSource, text: string, detail?: Record<string, unknown>) {
@@ -77,7 +85,7 @@ export class BuddyBrain {
 
     if (obs.phase !== this.lastPhase) {
       this.lastPhase = obs.phase;
-      this.send({ type: "status", jev: jevEnabled(), phase: obs.phase });
+      this.send({ type: "status", jev: this.useJev, phase: obs.phase });
       this.remember(`phase → ${obs.phase}`);
       if (obs.phase === "playing") this.op("system", `level ${obs.level + 1} · go!`);
       if (obs.phase === "gameover") this.op("system", "game over");
@@ -96,7 +104,7 @@ export class BuddyBrain {
           : `doing ${this.last.tag}${this.last.reason ? ` [${this.last.reason}]` : ""}; nearby: ${near || "nothing"}; ground=${prev.ai.onGround}; at levelX=${prev.ai.levelX} y=${prev.ai.y} (partner levelX=${prev.human.levelX} y=${prev.human.y}) level=${prev.level}`;
         this.remember(`buddy died — ${cause}`);
         this.op("system", `buddy down (lives ${obs.ai.lives}) — ${cause}`);
-        log.info(`death: ${cause}`);
+        if (!this.quiet) log.info(`death: ${cause}`);
       }
       if (prev.human.alive && !obs.human.alive) {
         this.stats.humanDeaths++;
@@ -143,7 +151,7 @@ export class BuddyBrain {
   /** Tank genre: reflexes decide the buttons; Jev only chooses the intent. */
   private playTank(obs: Observation, now: number) {
     const { ai } = getConfig();
-    if (obs.ai.alive && jevEnabled() && this.jevInflight < 2 && now - this.jevLastAt >= 1000 / ai.jevHz) {
+    if (obs.ai.alive && this.useJev && this.jevInflight < 2 && now - this.jevLastAt >= 1000 / ai.jevHz) {
       this.jevInflight++;
       this.jevLastAt = now;
       this.stats.jevCalls++;
@@ -213,12 +221,12 @@ export class BuddyBrain {
     // 1. Ask Jev jevHz times a second with up to two requests in flight (answers ~300–700 ms apart).
     const sign: 1 | -1 = 1;
     const gap = gapAhead(this.game, obs, this.mem, sign);
-    if (jevEnabled() && this.jevInflight < 2 && now - this.jevLastAt >= 1000 / ai.jevHz) {
+    if (this.useJev && this.jevInflight < 2 && now - this.jevLastAt >= 1000 / ai.jevHz) {
       this.jevInflight++;
       this.jevLastAt = now;
       this.stats.jevCalls++;
       const askedAt = now;
-      void jevDecide(this.game, obs, { recent: this.recent.slice(-5), gap })
+      void jevDecide(this.game, obs, { recent: this.recent.slice(-5), gap, edge: edgeAhead(this.game, obs, sign), dangers: dangersNear(this.game, obs) })
         .then((d) => {
           if (!d || this.stopped) return;
           this.stats.jevIn += d.usage.input;
@@ -273,7 +281,7 @@ export class BuddyBrain {
       why = h.why;
     }
     // A jump press is held for a few frames so the emulator registers it even across a tick boundary.
-    if (intent === "jump_forward" || intent === "jump_back") this.jumpHold = { intent, until: now + 120 };
+    if (intent === "jump_forward" || intent === "jump_back" || intent === "jump_up") this.jumpHold = { intent, until: now + 120 };
     else if (this.jumpHold && now < this.jumpHold.until) intent = this.jumpHold.intent;
     // A prone dodge is held a little after the trigger disappears so the bullet actually passes.
     if (intent !== "prone_fire" && this.mem.proneSince) {
@@ -286,7 +294,7 @@ export class BuddyBrain {
   }
 
   private jevSticky: { action: JevAction; since: number } | undefined;
-  private jumpHold: { intent: "jump_forward" | "jump_back"; until: number } | undefined;
+  private jumpHold: { intent: "jump_forward" | "jump_back" | "jump_up"; until: number } | undefined;
 
   /**
    * Jev's distribution is often flat (top option 20–40%). Twitchy one-off actions (jumps, prone)
@@ -327,6 +335,6 @@ export class BuddyBrain {
   stop() {
     if (this.stopped) return;
     this.stopped = true;
-    log.info(`brain stopped: ticks=${this.stats.ticks} play=${Math.round(this.playMs / 1000)}s jev=${this.stats.jevCalls} tokens=${this.stats.jevIn}/${this.stats.jevOut} deaths=${this.stats.aiDeaths}/${this.stats.humanDeaths} (${Math.round((Date.now() - this.startedAt) / 1000)}s)`);
+    if (!this.quiet) log.info(`brain stopped: ticks=${this.stats.ticks} play=${Math.round(this.playMs / 1000)}s jev=${this.stats.jevCalls} tokens=${this.stats.jevIn}/${this.stats.jevOut} deaths=${this.stats.aiDeaths}/${this.stats.humanDeaths} (${Math.round((Date.now() - this.startedAt) / 1000)}s)`);
   }
 }
