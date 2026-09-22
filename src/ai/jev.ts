@@ -4,6 +4,7 @@ import { logger } from "../log.js";
 import { genreOf, type GameProfile } from "../games/registry.js";
 import type { Observation } from "./observe.js";
 import type { EdgeInfo, GapInfo } from "./policy.js";
+import { describeHop, type RouteInfo } from "./route.js";
 import { TANK_INTENTS, tankSummary, type TankIntent } from "./tankPolicy.js";
 
 const log = logger("jev");
@@ -76,6 +77,20 @@ export interface JevExtra {
   dangers?: Array<{ from_px: number; to_px: number; note: string }>;
   /** Per-action descriptions computed for this very state (src/ai/criteria.ts); the static set otherwise. */
   criteria?: Record<keyof typeof JEV_ACTIONS, string>;
+  /** What the reflex policy would do right now, and why. `reflex` = a survival move Jev cannot override. */
+  plan?: { intent: string; why: string; reflex: boolean };
+  /** Planned route over the learned platform map. */
+  route?: RouteInfo;
+  /** Level briefing from the profile. */
+  stage?: { kind: string; name?: string; objective: string; tips?: string[] };
+}
+
+/** The profile's briefing for the current level (kind, objective, tips). */
+export function stageBrief(game: GameProfile, obs: Observation): JevExtra["stage"] {
+  const st = game.stages?.[String(obs.level)];
+  if (!st) return undefined;
+  if (typeof st === "string") return { kind: obs.corridor ? "corridor" : obs.levelDirection === "up" ? "vertical" : "side", objective: st };
+  return st;
 }
 
 /** Learned kill zones within reach of the buddy, as relative distances plus the lesson. */
@@ -109,6 +124,10 @@ export function jevState(obs: Observation, extra: JevExtra = {}): { [k: string]:
       ? { ends_in_px: Math.round(extra.edge.dist), ground_below: extra.edge.dropOk, next_platform: extra.edge.landing ? { dx: Math.round(extra.edge.landing.dx), dy: extra.edge.landing.dy, note: "reachable with a jump from the edge" } : "none known: walking off means falling" }
       : "none within 48px",
     known_dangers: extra.dangers && extra.dangers.length ? extra.dangers : "none learned nearby",
+    stage: extra.stage ? { kind: extra.stage.kind, name: extra.stage.name ?? `level ${obs.level + 1}`, objective: extra.stage.objective, tips: extra.stage.tips ?? [] } : { kind: obs.corridor ? "corridor" : obs.levelDirection, name: `level ${obs.level + 1}` },
+    route: extra.route ? { next: describeHop(extra.route, ai.levelX), hops_after: extra.route.hops, map_ends_in_px: Math.round(extra.route.endX - ai.levelX) } : "no mapped route from here (unknown ground or a corridor)",
+    big_targets: obs.enemies.filter((e) => e.hp > 1 && (e.category === "hostile" || e.category === "obstacle")).slice(0, 4).map((e) => ({ kind: e.category, dx: e.x - ai.x, dy: e.y - ai.y, hp: e.hp })),
+    plan: extra.plan ? { action: extra.plan.intent, why: extra.plan.why, kind: extra.plan.reflex ? "reflex (a bullet or a hazard: this happens regardless of your answer)" : "positioning/targeting proposal: pick it unless you see a better move" } : "none",
     objects_relative_to_buddy: enemies,
     legend: {
       kind: "hostile = enemy that can be shot; projectile = enemy bullet/grenade, cannot be shot, must be dodged; item = weapon power-up worth collecting (a flying capsule must be shot first); hazard = bridge that explodes under the buddy, never stand still on or next to it",
@@ -203,6 +222,9 @@ export async function jevDecide(game: GameProfile, obs: Observation, extra: JevE
               "A hostile ahead within 100px at the same height that is running at the buddy: hold_fire until it is gone; do not walk into it. Hostiles near the partner come first when the buddy itself is safe.",
               "The partner leads; never run more than ~60px ahead of a living partner. Prefer follow_partner when the partner is far ahead.",
               "Items are good: a weapon item within reach and no hostile nearby → move toward it (advance_fire if ahead, retreat if behind).",
+              "stage.objective says what this level is about; route.next is the mapped way on (the high road on level 1: the water and low ledges dead-end). Follow the route unless something is shooting at the hop point right now.",
+              "big_targets (hp above 1) are walls, cannons, sensors, cores: they die to sustained fire from a spot where their shots miss. In a corridor stage, advance_fire/retreat are steps right/left along the floor line, hold_fire fires into the screen at the target above, aim_up_fire runs into an opened wall; line up (dx near 0) under a target and hold_fire.",
+              "plan is the reflex policy's own proposal with its reason. Agree with it (pick the same action) unless the state shows a clearly better move; never pick a jump or prone against a plan that is walking to a ledge.",
             ],
           },
           (extra.criteria ?? JEV_ACTIONS) as Record<JevAction, string>,

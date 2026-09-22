@@ -102,6 +102,8 @@ export interface GameProfile {
   /** Present for genre "tank". */
   tank?: TankProfile;
   coachBrief: string;
+  /** Per-level briefing for Jev: kind of stage, objective, tips. Keyed by 0-based level. */
+  stages?: Record<string, { kind: "side" | "corridor" | "vertical"; name?: string; objective: string; tips?: string[] } | string>;
   /** Self-play knowledge (games/<id>/learned.json), merged in by the registry when present. */
   learned?: Learned;
 }

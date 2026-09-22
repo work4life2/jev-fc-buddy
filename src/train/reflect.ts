@@ -58,7 +58,10 @@ export function recordEval(game: GameProfile, tag: string, seed: number, episode
     duo: { deaths: d.deaths, distance: d.distance, perKpx: d.perKpx, progress: d.progress },
     score: (s.perKpx + 2 * d.perKpx) / 3,
   };
-  entry.accepted = !best || entry.score <= best.score;
+  // Accepted when it is not deadlier at the same reach, or when it reaches clearly further (a buddy that
+  // gets to the wall and dies there beats one that never leaves the river): progress first, deaths second.
+  const reach = (e: { solo: { progress: number }; duo: { progress: number } }) => e.solo.progress + 2 * e.duo.progress;
+  entry.accepted = !best || reach(entry) > reach(best) + 300 || (reach(entry) >= reach(best) - 150 && entry.score <= best.score);
   ledger.push(entry);
   fs.writeFileSync(ledgerPath(game), JSON.stringify(ledger, null, 1) + "\n");
   return { entry, best };

@@ -117,7 +117,7 @@ export function getConfig(): Config {
     },
     ai: {
       observeHz: envNum("AI_OBSERVE_HZ", 24),
-      jevHz: envNum("AI_JEV_HZ", 8),
+      jevHz: envNum("AI_JEV_HZ", 4),
     },
     coins: {
       perDollar: envNum("COINS_PER_DOLLAR", 1),

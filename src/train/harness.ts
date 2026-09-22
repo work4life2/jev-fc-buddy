@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
 import { BuddyBrain, type BuddyMessage } from "../ai/player.js";
-import { observe, type Observation } from "../ai/observe.js";
+import { observe, parseAddr, type Observation } from "../ai/observe.js";
 import { jevEnabled } from "../ai/jev.js";
 import { romPath, type GameProfile } from "../games/registry.js";
 import type { Button } from "../ai/policy.js";
@@ -83,6 +83,8 @@ export interface EpisodeReport {
   actions: Record<string, number>;
   /** The buddy stopped making progress (alive, same level-x for 30 s): where. */
   stuckAt?: number;
+  /** Levels finished during the episode. */
+  levelsCleared?: number;
   wallMs: number;
 }
 
@@ -96,6 +98,12 @@ export interface HarnessOptions {
   jev?: boolean;
   /** Print the ops stream. */
   verbose?: boolean;
+  /** Start on this level (0-based) by writing the profile's `level` RAM byte while the game loads. */
+  level?: number;
+  /** Keep the buddy's invincibility timer up (mapping runs: it still falls into pits). */
+  invincible?: boolean;
+  /** Explorer: ignore the brain, run forward with turbo fire and jump at seeded random moments, so the ground map fills in. */
+  explore?: boolean;
   onFrame?: (nes: { mem: number[] }, frame: number) => void;
 }
 
@@ -126,7 +134,10 @@ export async function runEpisode(o: HarnessOptions): Promise<EpisodeReport> {
   virtualMs = realNow();
 
   let frame = 0;
+  const levelAddr = game.ram.level ? parseAddr(game.ram.level) : -1;
+  const invAddr = game.ram.invincible ? parseAddr(game.ram.invincible[game.players.ai - 1]) : -1;
   const step = () => {
+    if (o.invincible && invAddr >= 0) mem[invAddr] = 0x40;
     nes.frame();
     frame++;
     if (virtual) virtualMs += 1000 / 60;
@@ -156,7 +167,11 @@ export async function runEpisode(o: HarnessOptions): Promise<EpisodeReport> {
     const ob = observe(game, snapshot());
     if (ob.phase === "title" && ob.playerMode !== wantMode) tapNow(menuC, BTN[game.start.selectButton as Button], 4);
     else if (ob.phase === "title" || (game.start.loadingStart && ob.phase === "loading")) tapNow(menuC, BTN[game.start.startButton as Button], 6);
-    for (let i = 0; i < 40; i++) step();
+    for (let i = 0; i < 40; i++) {
+      // The level byte is reset by the game's init and read while loading: keep writing it until play starts.
+      if (o.level && levelAddr >= 0 && phaseOf() !== "playing") mem[levelAddr] = o.level;
+      step();
+    }
   }
   if (phaseOf() !== "playing") throw new Error(`could not start the game (phase ${phaseOf()} after ${frame} frames)`);
 
@@ -185,13 +200,13 @@ export async function runEpisode(o: HarnessOptions): Promise<EpisodeReport> {
       actions[m.tag] = (actions[m.tag] ?? 0) + 1;
     } else if (m.type === "op") {
       if (m.src !== "system" && trail.length) trail[trail.length - 1] = `${trail[trail.length - 1]} [${m.text.replace(/^[A-Z+* ]+\s{2}/, "")}]`;
-      const target = /jump (?:to the next one|straight up onto the ledge) \(dx -?\d+, dy (-?\d+)\)/.exec(m.text);
-      if (target && pendingJump && frame - pendingJump.frame < 6) pendingJump.targetY = pendingJump.y + Number(target[1]);
+      const target = /jump (?:to the next one|straight up onto the ledge) \(dx -?\d+, dy (-?\d+)\)|route: jump.*\(dx -?\d+, dy (-?\d+)\)/.exec(m.text);
+      if (target && pendingJump && frame - pendingJump.frame < 6) pendingJump.targetY = pendingJump.y + Number(target[1] ?? target[2]);
       if (o.verbose) process.stdout.write(`  [${m.src}] ${m.text}\n`);
     }
   };
   // The harness handled the menus itself; the brain only ever sees the game running.
-  const brain = new BuddyBrain({ game, send, jev: useJev, quiet: true });
+  const brain = new BuddyBrain({ game, send: o.explore ? () => {} : send, jev: useJev && !o.explore, quiet: true });
 
   const deaths: DeathRecord[] = [];
   const ground: Record<string, Record<string, number[]>> = {};
@@ -204,14 +219,55 @@ export async function runEpisode(o: HarnessOptions): Promise<EpisodeReport> {
   let lifeStartX = 0;
   let lifeMaxX = 0;
   let distance = 0;
-  let level = 0;
+  let level = o.level ?? 0;
   let progress = 0;
   const maxFrames = o.maxFrames ?? 60 * 240;
   let progressAt = 0;
   let stuckAt: number | undefined;
+  let lastBigHp = 0;
+  let levelsCleared = 0;
   const humanC = game.players.human;
 
+  // Explorer: a seeded PRNG decides when to jump and when to double back for a moment.
+  let rng = (o.seed * 2654435761) >>> 0 || 1;
+  const rand = () => {
+    rng ^= rng << 13;
+    rng >>>= 0;
+    rng ^= rng >>> 17;
+    rng ^= rng << 5;
+    rng >>>= 0;
+    return rng / 4294967296;
+  };
+  let exploreJumpAt = 0;
+  let exploreBackUntil = 0;
+  let exploreRespawnDir = 0;
+  let exploreVertical = false;
+  const exploreButtons = () => {
+    if (frame >= exploreJumpAt) {
+      exploreJumpAt = frame + 20 + Math.floor(rand() * 140);
+      const r = rand();
+      if (r < 0.15) exploreBackUntil = frame + 30 + Math.floor(rand() * 60);
+      exploreVertical = r > 0.6; // a standing jump straight up finds the ledges overhead
+    }
+    held.clear();
+    turbo.clear();
+    // Respawning over a pit kills again and again: drift left or right (per life) while falling in.
+    if (lastAct && !lastAct.ai.alive && lastAct.ai.state === game.playerState.falling) {
+      if (exploreRespawnDir === 0) exploreRespawnDir = rand() < 0.5 ? BTN.LEFT : BTN.RIGHT;
+      held.add(exploreRespawnDir);
+      return;
+    }
+    exploreRespawnDir = 0;
+    const jumping = frame >= exploreJumpAt - 8 && frame < exploreJumpAt;
+    const standing = exploreVertical && frame >= exploreJumpAt - 14 && frame < exploreJumpAt + 30;
+    if (!standing) held.add(frame < exploreBackUntil ? BTN.LEFT : BTN.RIGHT);
+    turbo.add(BTN.B);
+    if (jumping) held.add(BTN.A);
+    if (frame === exploreJumpAt - 8 && lastAct?.ai.alive && lastAct.ai.onGround && !pendingJump) pendingJump = { x: lastAct.ai.levelX, y: lastAct.ai.y, level: lastAct.level, frame };
+  };
+
   const applyButtons = () => {
+    if (o.explore) exploreButtons();
     for (let b = 0; b < 8; b++) {
       let down = held.has(b);
       if (turbo.has(b)) down = ((frame >> 2) & 1) === 1;
@@ -232,6 +288,7 @@ export async function runEpisode(o: HarnessOptions): Promise<EpisodeReport> {
     const obs = observe(game, snapshot(), prev);
     if (obs.phase === "playing") {
       if (obs.level !== level) {
+        if (obs.level > level) levelsCleared++;
         level = obs.level;
         progress = 0;
         lifeStartX = obs.ai.levelX;
@@ -243,6 +300,10 @@ export async function runEpisode(o: HarnessOptions): Promise<EpisodeReport> {
           progress = obs.ai.levelX;
           progressAt = frame;
         }
+        // Wearing a wall or boss down is progress too (the screen is locked, x cannot grow).
+        const bigHp = obs.enemies.filter((e) => (e.category === "hostile" || e.category === "obstacle") && e.hp >= 8).reduce((n, e) => n + e.hp, 0);
+        if (bigHp < lastBigHp) progressAt = frame;
+        lastBigHp = bigHp;
         if (frame - progressAt > 60 * 30 && stuckAt === undefined) stuckAt = obs.ai.levelX;
         if (obs.ai.x === lastX) stillFrames += 2.5;
         else stillFrames = 0;
@@ -265,11 +326,13 @@ export async function runEpisode(o: HarnessOptions): Promise<EpisodeReport> {
       if (prev?.ai.alive && !obs.ai.alive) {
         // Died. Classify from what we saw just before.
         const p = prev;
+        const rising = yHist.length >= 4 && yHist.every((y, i) => i === 0 || y >= yHist[i - 1]!) && yHist[yHist.length - 1]! - yHist[0]! >= 10;
         if (pendingJump) {
-          jumps.push({ level: pendingJump.level, x: pendingJump.x, y: pendingJump.y, targetY: pendingJump.targetY, landedX: p.ai.levelX, landedY: 240, ok: false, died: true });
+          // A fall after a jump is a miss (the ledge was not where the map says); a shot in the air says nothing.
+          const fell = (rising && p.ai.y >= 200) || p.ai.y >= 232;
+          jumps.push({ level: pendingJump.level, x: pendingJump.x, y: pendingJump.y, targetY: pendingJump.targetY, landedX: p.ai.levelX, landedY: 240, ok: false, died: !fell });
           pendingJump = undefined;
         }
-        const rising = yHist.length >= 4 && yHist.every((y, i) => i === 0 || y >= yHist[i - 1]!) && yHist[yHist.length - 1]! - yHist[0]! >= 10;
         const near = p.enemies
           .map((e) => ({ category: e.category, type: e.type, dx: e.x - p.ai.x, dy: e.y - p.ai.y, vx: e.vx, vy: e.vy }))
           .filter((e) => e.category === "projectile" || e.category === "hostile")
@@ -345,5 +408,5 @@ export async function runEpisode(o: HarnessOptions): Promise<EpisodeReport> {
   if (prev?.ai.alive) distance += Math.max(0, lifeMaxX - lifeStartX);
   brain.stop();
   virtual = false;
-  return { game: game.id, mode: o.mode, seed: o.seed, jev: useJev, frames: frame, level, progress, distance, deaths, jumps, partnerDeaths, ground, actions, stuckAt, wallMs: realNow() - started };
+  return { game: game.id, mode: o.mode, seed: o.seed, jev: useJev, frames: frame, level, progress, distance, deaths, jumps, partnerDeaths, ground, actions, stuckAt, levelsCleared, wallMs: realNow() - started };
 }

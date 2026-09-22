@@ -7,9 +7,11 @@ import fs from "node:fs";
 import path from "node:path";
 
 /**
- * `jev-fc-buddy train <run|learn|sweep|show> [--game id] [--episodes N] [--seed N] [--duo] [--jev] [--frames N] [-v]`
+ * `jev-fc-buddy train <run|learn|sweep|show> [--game id] [--episodes N] [--seed N] [--duo] [--jev] [--frames N] [--level N] [-v]`
  *
  *   run    play N episodes alone (or with the scripted partner, --duo), save the reports, print a summary
+ *          --level N starts on level N+1 (RAM poke); --invincible --explore maps a level with a random-jump runner
+ *          (falls still count, so pits and platforms fill in without the buddy having to survive the enemies)
  *   learn  fold every saved report into games/<id>/learned.json (pits, kill zones, platforms)
  *   sweep  --param name=v1,v2,...: play N episodes per value, print the table; --apply writes the best one
  *   eval   fixed-seed solo + duo evaluation (default seed 7000, 12 each) recorded in the ledger; --tag names the candidate
@@ -50,7 +52,7 @@ export function summarize(reports: EpisodeReport[]): { deaths: number; distance:
 
 function line(r: EpisodeReport): string {
   const causes = r.deaths.map((d) => `${d.cause[0]}@${d.levelX}`).join(" ");
-  return `seed ${String(r.seed).padStart(3)}  level ${r.level + 1}  progress ${String(r.progress).padStart(5)}  distance ${String(r.distance).padStart(5)}  deaths ${r.deaths.length}  [${causes}]${r.stuckAt !== undefined ? `  stuck@${r.stuckAt}` : ""}  ${(r.wallMs / 1000).toFixed(1)}s`;
+  return `seed ${String(r.seed).padStart(3)}  level ${r.level + 1}${r.levelsCleared ? `(+${r.levelsCleared})` : ""}  progress ${String(r.progress).padStart(5)}  distance ${String(r.distance).padStart(5)}  deaths ${r.deaths.length}  [${causes}]${r.stuckAt !== undefined ? `  stuck@${r.stuckAt}` : ""}  ${(r.wallMs / 1000).toFixed(1)}s`;
 }
 
 async function play(game: GameProfile, args: string[], seeds: number[], quiet = false): Promise<EpisodeReport[]> {
@@ -58,9 +60,12 @@ async function play(game: GameProfile, args: string[], seeds: number[], quiet = 
   const jev = args.includes("--jev");
   const maxFrames = Number(opt(args, "--frames") ?? 60 * 240);
   const verbose = args.includes("-v");
+  const level = Number(opt(args, "--level") ?? 0);
+  const invincible = args.includes("--invincible");
+  const explore = args.includes("--explore");
   const out: EpisodeReport[] = [];
   for (const seed of seeds) {
-    const r = await runEpisode({ game, mode, seed, jev, maxFrames, verbose });
+    const r = await runEpisode({ game, mode, seed, jev, maxFrames, verbose, level, invincible, explore });
     out.push(r);
     if (!quiet) process.stdout.write(line(r) + "\n");
   }
@@ -118,7 +123,7 @@ export async function trainCli(rest: string[]): Promise<void> {
       return;
     }
     case "ledger": {
-      for (const e of loadLedger(game)) process.stdout.write(`${e.at.slice(0, 16)} ${e.sha.padEnd(9)} ${e.tag.padEnd(28)} solo ${String(e.solo.deaths).padStart(3)} (${e.solo.perKpx.toFixed(2)})  duo ${String(e.duo.deaths).padStart(3)} (${e.duo.perKpx.toFixed(2)})  score ${e.score.toFixed(3)} ${e.accepted ? "✓" : "✗"}\n`);
+      for (const e of loadLedger(game)) process.stdout.write(`${e.at.slice(0, 16)} ${e.sha.padEnd(9)} ${e.tag.padEnd(28)} solo ${String(e.solo.deaths).padStart(3)} (${e.solo.perKpx.toFixed(2)}) reach ${String(e.solo.progress).padStart(4)}  duo ${String(e.duo.deaths).padStart(3)} (${e.duo.perKpx.toFixed(2)}) reach ${String(e.duo.progress).padStart(4)}  score ${e.score.toFixed(3)} ${e.accepted ? "✓" : "✗"}\n`);
       return;
     }
     case "reflect": {

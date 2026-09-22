@@ -94,14 +94,24 @@ and every piece of ground it stood on. `learn` folds the reports into `games/<id
 - **pits** — edges the buddy walked or jumped off and died (with the height they apply to),
 - **kill zones** — where it was shot or run over repeatedly, from which direction, and the lesson,
 - **platforms** — the ground map, so it knows where a ledge ends and which ledge a jump reaches,
-- **bad jumps** — ledges it tried to jump onto and never arrived (cliff faces).
+- **bad jumps** — ledges it tried to jump onto and never arrived (cliff faces, or a fall after the jump).
 
-The reflex policy reads that file on the next start (never walk off a known edge, jump to a known
-platform from the right spot, never stand still in a kill zone) and Jev gets the nearby zones and the
-ledge ahead in its state. What the buddy learns alone is what it plays with next to a human.
+The reflex policy reads that file on the next start and plans a **route** over the platform map
+(`src/ai/route.ts`: cheapest chain of hops — walk, drop, running jump, standing jump — from the ledge
+it stands on to the furthest known ground; dead ends route back to the last climb, or, with lives to
+spare, into the next pit so the respawn drop can be steered onto the high road). Jev gets the next hop,
+the nearby zones and the reflex policy's own proposal in its state. What the buddy learns alone is what
+it plays with next to a human.
+
+Mapping a level does not need the buddy to survive it: `--explore --invincible` runs a random-jump
+runner with the invincibility timer pinned (falls still kill, so pits and platforms fill in), and
+`--level N` starts on level N+1 by writing the level byte while the game loads, so the base corridors
+and later levels train on their own.
 
 ```bash
 node dist/index.js train run --episodes 6 --rounds 4     # play, learn, reload, repeat (reflex only, fast)
+node dist/index.js train run --episodes 30 --explore --invincible --frames 14000   # map a level, then `train learn`
+node dist/index.js train run --episodes 4 --level 1      # start on level 2 (the base corridor)
 node dist/index.js train run --episodes 3 --duo          # with a scripted partner (runs right and fires)
 node dist/index.js train run --episodes 1 --jev          # real-time pacing, Jev asked as in production
 node dist/index.js train show                            # what learned.json knows
@@ -114,7 +124,9 @@ node dist/index.js train reflect --last 24               # deaths grouped by pla
 The change loop (borrowed from [JevHarness](https://github.com/TianyuCodings/JevHarness), whose LLM-authored
 harness + reflection + fixed evaluation is the same idea): `reflect` says where and how the buddy dies,
 you change one rule in `src/ai/policy.ts` or one criterion in `src/ai/criteria.ts`, `eval` scores the
-candidate on the same seeds as every previous one (score = deaths per 1000 px, duo counted twice) and
+candidate on the same seeds as every previous one (score = deaths per 1000 px, duo counted twice; a
+candidate that reaches clearly further is accepted even when it dies more, because a buddy that gets to
+the wall and dies there beats one that never leaves the river) and
 marks it accepted only if it is not worse than the best so far. Jev's action descriptions are computed per
 state in `criteria.ts` (what each move does right now: walks into a shooter's reach, jumps into a bullet,
 steps off a ledge, leaves the partner), so code supplies the facts and Jev only judges.
@@ -217,7 +229,8 @@ src/index.ts           CLI: serve · code · setup · model · doctor · jobs ·
 src/server/http.ts     REST (/api/redeem, /api/sessions, /api/games/:id/rom, /api/admin/*), WebSocket, static page or redirect
 src/server/dashboard.ts operator dashboard page · src/server/spend.ts relay (OpenRouter) key spend
 src/ai/observe.ts      RAM bytes → game-agnostic observation (via the game profile)
-src/ai/policy.ts       reflex policy (run-and-gun): intent → held buttons
+src/ai/policy.ts       reflex policy (run-and-gun): intent → held buttons; wall fights, base corridors, falls
+src/ai/route.ts        route planning over the learned platform map (next hop, respawn targets)
 src/ai/tankPolicy.ts   reflex policy (tank): shells, lanes, path finding, base protection
 src/ai/jev.ts          TypeSafe Jev: typed Choice / Noul questions over the observation
 src/ai/player.ts       the brain: reflex ⟷ Jev, ops stream

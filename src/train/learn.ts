@@ -104,7 +104,7 @@ export function learn(game: GameProfile, reports: EpisodeReport[]): Learned {
     const pits = cluster(
       falls,
       8,
-      () => true,
+      (a, b) => Math.abs(a.y1 - b.y1) < 40, // one zone per tier: a drop from the high road is not the water's pit
       (a, b) => ({ x1: Math.min(a.x1, b.x1), x2: Math.max(a.x2, b.x2), y1: Math.min(a.y1, b.y1), y2: 240, count: a.count + b.count, jumped: a.jumped + b.jumped }),
     ).filter((p) => p.count >= 2);
     // Kill zones: same cause and direction within 48 px and 40 px of height.

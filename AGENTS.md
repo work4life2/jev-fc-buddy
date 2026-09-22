@@ -10,13 +10,20 @@ coin codes on the Termix agent marketplace.
   questions over structured state. `src/ai/jev.ts` is the integration; read the live docs at
   https://docs.typesafe.ai/llms.txt before changing the questions.
 - `games/<id>/game.json` — one profile per game: ROM name, RAM addresses, phases, 2-player start
-  procedure, reflex parameters, game brief. Nothing outside `games/` may mention a specific title.
+  procedure, reflex parameters, game brief, and `stages` (per-level kind / objective / tips: the text Jev
+  is briefed with; `kind: corridor` switches the reflex policy to the base-corridor mode). Nothing outside
+  `games/` may mention a specific title.
   `games/<id>/learned.json` is written by `node dist/index.js train run --rounds N` (self-play in a
   headless jsnes, see README → Self-play training): pits, kill zones, platforms, failed jumps. It is
   committed and deploys with the code. After changing `src/ai/policy.ts` or `src/ai/criteria.ts` run
   `node dist/index.js train eval --tag <what>`: it scores the candidate on fixed seeds against every earlier one
-  (`train ledger`) and must not come out worse; `train reflect` lists where the buddy still dies. Reports and the
+  (`train ledger`) and must not come out worse (reach first, deaths second); `train reflect` lists where the buddy still dies. Reports and the
   ledger live in `data/train/` (git-ignored). Six-episode rounds are noisy: judge changes on the 24-episode eval only.
+  `train run --explore --invincible` maps a level (random-jump runner, invincibility pinned via RAM), `--level N`
+  starts on level N+1 (RAM poke while loading): use them before blaming the policy for an unmapped ledge.
+  Decision split in `src/ai/player.ts`: reflexes (bullets, hazards, falls) always win; positioning/targeting
+  decisions are marked `plan` and a fresh Jev answer at ≥45 % may override them. Jev is asked 4×/s (`AI_JEV_HZ`)
+  with the stage brief, the planned route hop, the big targets and the reflex plan in its state.
 - `roms/` — ROM files (git-ignored). `web/` — the play page (vanilla JS + jsnes). `src/` — server.
 - Never write into `skills/`; test data goes under `data/`.
 

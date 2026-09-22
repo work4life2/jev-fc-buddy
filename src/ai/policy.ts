@@ -1,6 +1,7 @@
 import type { GameProfile } from "../games/registry.js";
 import type { EnemyObs, Observation } from "./observe.js";
 import type { JevAction } from "./jev.js";
+import { describeHop, hopKey, routeAhead, routedPlatforms, JUMP, type Hop } from "./route.js";
 
 /**
  * The reflex policy: turns an intent (from Jev or its own heuristics) plus the current
@@ -22,9 +23,16 @@ export interface Action {
 }
 
 /** Jev's action set plus policy-internal moves Jev does not need to know about. */
-export type Intent = JevAction | "auto" | "aim_diag_fire" | "jump_up";
+export type Intent = JevAction | "auto" | "aim_diag_fire" | "jump_up" | "aim_back_fire" | "prone_back_fire";
 
 export const IDLE: Action = { hold: [], turbo: [], tag: "idle", reason: "" };
+
+/** What the policy wants to do. `plan` marks positioning / targeting choices Jev may override; the rest are reflexes. */
+export interface Decision {
+  intent: Intent;
+  why: string;
+  plan?: boolean;
+}
 
 export interface PolicyMemory {
   lastX: number;
@@ -35,17 +43,31 @@ export interface PolicyMemory {
   /** While set, a "turn" input is being held so the sprite faces the other way. */
   turnUntil: number;
   proneSince: number;
-  /** Level-x positions where ground that gives way was seen (bridges). Gaps stay after the object is gone. */
-  gaps: number[];
+  /** Level-x positions (and height) where ground that gives way was seen (bridges). Gaps stay after the object is gone. */
+  gaps: Array<{ x: number; y: number }>;
+  /** Screen y on the previous tick and how many ticks in a row it has been dropping (falling detection). */
+  lastY: number;
+  fallTicks: number;
+  /** The buddy just came back to life: the respawn drop lasts about 1.3 s and is steerable. */
+  respawnUntil: number;
+  wasAlive: boolean;
+  /** Ledge chosen for the current fall (kept until the buddy stands again). */
+  fallTarget?: [number, number, number];
+  /** The route hop the buddy last jumped for, and hops that ended in a fall this session (avoided from then on). */
+  lastHop?: { hop: Hop; at: number };
+  failedHops: Set<string>;
   level: number;
   /** A positional evasion (leave a shooter, sidestep a fan) is kept for a while so rules do not thrash. */
   commit?: { intent: Intent; why: string; until: number };
   /** Direction of the last "leave the shooter" move, to flip it when it produced no movement. */
   aimedDir?: 1 | -1;
+  /** Scroll position last tick and since when it has not moved (a locked screen = boss / wall fight). */
+  lastScroll?: number;
+  scrollStillSince?: number;
 }
 
 export function newMemory(): PolicyMemory {
-  return { lastX: -1, stillSince: 0, lastJumpAt: 0, facing: 1, turnUntil: 0, proneSince: 0, gaps: [], level: -1 };
+  return { lastX: -1, lastY: -1, fallTicks: 0, respawnUntil: 0, wasAlive: false, failedHops: new Set(), stillSince: 0, lastJumpAt: 0, facing: 1, turnUntil: 0, proneSince: 0, gaps: [], level: -1 };
 }
 
 /** Remember hazards in level coordinates so the gap they leave behind is still known. */
@@ -57,7 +79,7 @@ export function rememberHazards(obs: Observation, mem: PolicyMemory): void {
   for (const e of obs.enemies) {
     if (e.category !== "hazard") continue;
     const lx = obs.levelScrollX + e.x;
-    if (!mem.gaps.some((g) => Math.abs(g - lx) < 24)) mem.gaps.push(lx);
+    if (!mem.gaps.some((g) => Math.abs(g.x - lx) < 24)) mem.gaps.push({ x: lx, y: e.y });
   }
 }
 
@@ -104,7 +126,8 @@ export function gapAhead(game: GameProfile, obs: Observation, mem: PolicyMemory,
   const zones: Array<[number, number, GapInfo["kind"]]> = [...profileZones, ...learnedPits]
     .filter((z) => z.length < 4 || (obs.ai.y >= (z[2] as number) && obs.ai.y <= (z[3] as number)))
     .map((z) => [z[0], z[1], (z[4] as GapInfo["kind"] | undefined) ?? "bridge"] as [number, number, GapInfo["kind"]]);
-  for (const g of mem.gaps) if (!zones.some(([a, b]) => g >= a - 24 && g <= b + 24)) zones.push([g - 16, g + 16, "bridge"]);
+  // A remembered bridge only counts at its own height: the water under it is a different route.
+  for (const g of mem.gaps) if (Math.abs(g.y - obs.ai.y) < 40 && !zones.some(([a, b]) => g.x >= a - 24 && g.x <= b + 24)) zones.push([g.x - 16, g.x + 16, "bridge"]);
   const me = obs.ai.levelX;
   let best: GapInfo | undefined;
   for (const [a, b, kind] of zones) {
@@ -140,9 +163,6 @@ export function jumpKindFor(edge: EdgeInfo, me: number, sign: 1 | -1): "jump_for
   if (l.dx === 0 && l.dy < 0 && me >= l.x1 + 4 && me <= l.x2 - 4) return "jump_up";
   return short ? "early" : undefined;
 }
-
-/** Jump reach, measured in the emulator: 58 px up, ~60 frames, 59 px across on level ground at 1 px/frame. */
-const JUMP = { height: 58, across: 59, fallPxPerFrame: 2.5 };
 
 export interface EdgeInfo {
   /** Level-forward px to the end of the platform the buddy stands on. */
@@ -189,10 +209,41 @@ export function edgeAhead(game: GameProfile, obs: Observation, sign: 1 | -1): Ed
 }
 
 /** During the respawn fall the buddy can steer: aim for solid ground next to the partner. */
-export function respawnSteer(game: GameProfile, obs: Observation, mem: PolicyMemory): { dir: Button; why: string } | undefined {
+export function respawnSteer(game: GameProfile, obs: Observation, mem: PolicyMemory): { dir?: Button; why: string } | undefined {
   if (obs.ai.state !== game.playerState.falling) return undefined;
+  return fallSteer(game, obs, mem);
+}
+
+/**
+ * Falling (respawn drop, or alive in the air after walking off something): steer toward ground with a
+ * way on. The game makes the player controllable again mid-fall, and standing rules ("stop at the
+ * pit") do nothing for a body already in the air.
+ */
+export function fallSteer(game: GameProfile, obs: Observation, mem: PolicyMemory): { dir?: Button; why: string } | undefined {
   const zones = [...(game.terrain?.gaps?.[String(obs.level)] ?? []), ...(game.learned?.levels[String(obs.level)]?.pits ?? [])];
   const me = obs.ai.levelX;
+  // Known map: drift toward the ledge on screen (above us, or level with us) that has the cheapest way on.
+  if (obs.levelDirection === "right") {
+    const left = obs.levelScrollX + 8;
+    const right = obs.levelScrollX + obs.screen.width - 8;
+    // A fall drifts about 1 px per frame: only ledges within ~40 px sideways can still be reached.
+    const options = routedPlatforms(game, obs.level, mem.failedHops)
+      .map(({ platform: p, cost }) => {
+        const x = Math.min(Math.max(me, p[0] + 12, left), p[1] - 12, right);
+        return { p, x, cost, dx: Math.abs(x - me) };
+      })
+      .filter(({ x, p }) => x >= Math.max(left, p[0] + 12) && x <= Math.min(right, p[1] - 12) && p[2] > obs.ai.y - 8);
+    // Nearest first (a fall has little time to drift), route cost only breaks ties; the choice is locked for the whole fall.
+    const reachable = options.filter((o) => o.dx <= Math.max(16, (o.p[2] - obs.ai.y) / 2.2)).sort((a, b) => a.dx + a.cost / 50 - (b.dx + b.cost / 50));
+    // Wall fight: the floor, nothing else (the ledges by the wall are point-blank for its cannons).
+    const floor = bossActive(obs, mem, Date.now()) ? reachable.filter((o) => o.p[2] === Math.max(...reachable.map((r) => r.p[2])))[0] : undefined;
+    const locked = mem.fallTarget ? options.find((o) => o.p === mem.fallTarget) : undefined;
+    const best = locked ?? floor ?? reachable[0] ?? options.sort((a, b) => a.dx - b.dx)[0];
+    if (best) mem.fallTarget = best.p;
+    if (best && Math.abs(best.x - me) > 4) return { dir: best.x > me ? "RIGHT" : "LEFT", why: `${obs.ai.alive ? "falling" : "respawning"} → drift to the ledge at y ${best.p[2]} (${best.x > me ? "right" : "left"})` };
+    // Straight above good ground: no sideways input at all (any step drifts off it).
+    if (best) return { why: `${obs.ai.alive ? "falling" : "respawning"} onto the ledge at y ${best.p[2]} → hold still` };
+  }
   const zone = zones.map((z) => [z[0], z[1]] as [number, number]).find(([a, b]) => me >= a - 12 && me <= b + 12);
   if (zone) {
     // Over a pit: drift to whichever edge is closer to the partner (or simply the nearer edge).
@@ -225,7 +276,7 @@ export function threatOf(e: Rel, dodge: number): Threat | undefined {
   const speed2 = vx * vx + vy * vy;
   if (speed2 === 0) {
     // Unknown velocity: only worry when it is next to us at body height.
-    if (Math.abs(e.dx) < 40 && e.dy > -30 && e.dy < 22) return { e, kind: "body", ticks: Math.abs(e.dx) / 3, yAt: e.dy, xAt: e.dx };
+    if (Math.abs(e.dx) < 40 && e.dy > -30 && e.dy < 22) return { e, kind: e.dy > 4 ? "low" : "body", ticks: Math.abs(e.dx) / 3, yAt: e.dy, xAt: e.dx };
     return undefined;
   }
   // Closest approach along the straight path.
@@ -283,6 +334,45 @@ function stopSafely(game: GameProfile, obs: Observation, mem: PolicyMemory, rel:
   return { intent: "hold_fire", why };
 }
 
+/**
+ * Follow the planned route (learned platform map): walk to the hop point, then make the hop. Returns
+ * undefined when the map does not know this ground, when the hop point is still far ahead (normal
+ * rules apply on the way) or when the route simply continues along this ledge.
+ */
+export function routeIntent(game: GameProfile, obs: Observation, mem: PolicyMemory, rel: Rel[], sign: 1 | -1, now: number, force = false): Decision | undefined {
+  if (sign < 0) return undefined;
+  const r = routeAhead(game, obs, mem.failedHops);
+  if (!r || r.next.kind === "walk") return undefined;
+  const d0 = routeIntentInner(game, obs, mem, rel, sign, now, force, r);
+  if (d0 && (d0.intent === "jump_forward" || d0.intent === "jump_up")) mem.lastHop = { hop: r.next, at: now };
+  return d0 ? { ...d0, plan: true } : undefined;
+}
+
+function routeIntentInner(game: GameProfile, obs: Observation, mem: PolicyMemory, rel: Rel[], sign: 1 | -1, now: number, force: boolean, r: NonNullable<ReturnType<typeof routeAhead>>): { intent: Intent; why: string } | undefined {
+  const ai = obs.ai;
+  const d = r.next.atX - ai.levelX;
+  const what = `route: ${describeHop(r, ai.levelX)}`;
+  // A long way back to the last climb (the low road is a dead end): with lives to spare, dropping into
+  // the pit ahead respawns at the top of the screen, from where the high road is a short drift away.
+  if (d < -160 && r.cost > 500 && ai.lives >= 3) {
+    const pit = gapAhead(game, obs, mem, sign, 120);
+    if (pit && pit.kind !== "bridge") return { intent: "advance_fire", why: `dead end (route cost ${Math.round(r.cost)}): drop into the pit ahead and respawn on the high road` };
+    return { intent: "advance_fire", why: `dead end (route cost ${Math.round(r.cost)}): push on to the next drop and respawn on the high road` };
+  }
+  if (d > 8) return force ? { intent: "advance_fire", why: what } : undefined;
+  if (d < -8) {
+    if (ai.x < 28) return { intent: "hold_fire", why: `${what} (screen edge, wait for the scroll)` };
+    mem.commit = { intent: "retreat", why: what, until: now + 250 };
+    return { intent: "retreat", why: what };
+  }
+  if (r.next.kind === "drop") return { intent: "advance_fire", why: what };
+  if (!ai.onGround) return undefined;
+  const kind: Intent = r.next.kind === "jump_up" ? "jump_up" : "jump_forward";
+  if (now - mem.lastJumpAt > 500 && (jumpIsSafe(rel) || d <= 2)) return { intent: kind, why: what };
+  if (now - mem.lastJumpAt <= 500) return { intent: "hold_fire", why: `${what} (in the air)` };
+  return stopSafely(game, obs, mem, rel, sign, now, `${what}, bullets in the air → wait`);
+}
+
 /** Enemies that stand and shoot (profile keepDistance list, or anything that takes more than one hit). */
 export function isShooter(game: GameProfile, e: Rel): boolean {
   const byType = game.enemyTypes?.keepDistance?.[`0x${e.type.toString(16).padStart(2, "0")}`];
@@ -290,10 +380,113 @@ export function isShooter(game: GameProfile, e: Rel): boolean {
 }
 
 /**
+ * Base corridor (3D view): one floor line, fire goes into the screen, enemy shots come down it toward
+ * the buddy's x. Line up under the target (wall cores / sensors take several hits) and fire; sidestep a
+ * shot that is coming down onto us; step away from a soldier about to reach the floor line.
+ */
+export function corridorIntent(game: GameProfile, obs: Observation, mem: PolicyMemory, rel: Rel[], now: number): Decision {
+  const ai = obs.ai;
+  const room = (dir: 1 | -1) => (dir > 0 ? obs.screen.width - 40 - ai.x : ai.x - 40);
+  const bullets = rel.filter((e) => e.category === "projectile");
+  // A shot heading down our column: it lands where its x will be at our height.
+  const incoming = bullets
+    .map((e) => ({ e, xAt: e.vy > 0 ? e.dx + e.vx * Math.max(0, -e.dy / e.vy) : e.dx, ticks: e.vy > 0 ? -e.dy / e.vy : 99 }))
+    .filter((t) => t.e.dy < 0 && t.e.dy > -90 && Math.abs(t.xAt) < 22 && t.ticks < 14)
+    .sort((a, b) => a.ticks - b.ticks)[0];
+  if (incoming) {
+    const mode = process.env.CORRIDOR_DODGE ?? "side";
+    if (mode === "prone") return { intent: "prone_fire", why: `corridor: shot coming down at us (dx ${incoming.e.dx}, dy ${incoming.e.dy}) → duck` };
+    if (mode === "jump" && ai.onGround && now - mem.lastJumpAt > 700) return { intent: "jump_forward", why: `corridor: shot coming down at us (dx ${incoming.e.dx}, dy ${incoming.e.dy}) → hop` };
+    // Sidestep to whichever side has fewer shots landing (a spread of three is common): score x±28.
+    const landings = bullets.filter((e) => e.dy < 0 && e.vy > 0).map((e) => e.dx + e.vx * Math.max(0, -e.dy / e.vy));
+    const danger = (at: number) => landings.reduce((n, l) => n + (Math.abs(l - at) < 16 ? 1 : 0), 0) * 100 - Math.min(...landings.map((l) => Math.abs(l - at)), 99);
+    const away: 1 | -1 = incoming.xAt >= 0 ? -1 : 1;
+    let dir: 1 | -1 = danger(28 * away) <= danger(-28 * away) ? away : ((away * -1) as 1 | -1);
+    if (room(dir) < 24) dir = (dir * -1) as 1 | -1;
+    mem.commit = { intent: dir > 0 ? "advance_fire" : "retreat", why: `corridor: shot coming down at us (dx ${incoming.e.dx}, dy ${incoming.e.dy}, lands ${Math.round(incoming.xAt)}px) → sidestep ${dir > 0 ? "right" : "left"}`, until: now + 300 };
+    return { intent: mem.commit.intent, why: mem.commit.why };
+  }
+  if (mem.commit && now < mem.commit.until) return { intent: mem.commit.intent, why: mem.commit.why };
+  mem.commit = undefined;
+  // A soldier about to reach the floor line next to us: step away from it while firing.
+  const runner = rel.find((e) => e.category === "hostile" && e.hp <= 1 && Math.abs(e.dx) < 28 && e.dy > -40 && e.dy < 12);
+  if (runner) {
+    const away: 1 | -1 = runner.dx >= 0 ? -1 : 1;
+    const dir = room(away) < 24 ? ((away * -1) as 1 | -1) : away;
+    return { intent: dir > 0 ? "advance_fire" : "retreat", why: `corridor: soldier dropping in (dx ${runner.dx}, dy ${runner.dy}) → step ${dir > 0 ? "right" : "left"}` };
+  }
+  // Targets: anything that takes several hits (cores, sensors), nearest column first; else a soldier in front.
+  const targets = rel.filter((e) => (e.category === "hostile" || e.category === "obstacle") && e.hp > 1 && e.dy < 0).sort((a, b) => Math.abs(a.dx) - Math.abs(b.dx));
+  const soldier = rel.filter((e) => e.category === "hostile" && e.hp <= 1 && e.dy < -8 && Math.abs(e.dx) < 60).sort((a, b) => Math.abs(a.dx) - Math.abs(b.dx))[0];
+  const target = targets[0] ?? soldier;
+  // Nothing left on this screen: the wall is open, run in (UP walks into the screen).
+  if (!target) return { intent: "aim_up_fire", why: "corridor: nothing left to shoot → run into the open wall", plan: true };
+  if (Math.abs(target.dx) > 6) return { intent: target.dx > 0 ? "advance_fire" : "retreat", why: `corridor: line up under the ${target.hp > 1 ? `target (hp ${target.hp})` : "soldier"} (dx ${target.dx})`, plan: true };
+  return { intent: "hold_fire", why: `corridor: firing at the ${target.hp > 1 ? `target (hp ${target.hp}, dy ${target.dy})` : "soldier"}`, plan: true };
+}
+
+/** Locked screen with something big to kill on it: the wall fight is on. */
+export function bossActive(obs: Observation, mem: PolicyMemory, now: number): boolean {
+  if (!mem.scrollStillSince || now - mem.scrollStillSince < 1500) return false;
+  return obs.enemies.some((e) => (e.category === "hostile" || e.category === "obstacle") && e.hp >= 8 && Math.abs(e.x - obs.ai.x) < 240);
+}
+
+/**
+ * Wall / boss fight on a locked screen: what to shoot and where to stand. Fought from the arena
+ * floor. Order: the sniper crouching at our height (it shoots along the ground, and we respawn on
+ * top of it), then the cannons (they are what fires at us), then the core (which ends the level).
+ * Diagonal fire only happens while walking, so the buddy paces around the 45° spot for a cannon.
+ */
+export function bossIntent(game: GameProfile, obs: Observation, mem: PolicyMemory, rel: Rel[], sign: 1 | -1, now: number): Decision | undefined {
+  if (!bossActive(obs, mem, now)) return undefined;
+  const d0 = bossIntentInner(game, obs, mem, rel, sign, now);
+  return d0 ? { ...d0, plan: true } : undefined;
+}
+
+function bossIntentInner(game: GameProfile, obs: Observation, mem: PolicyMemory, rel: Rel[], sign: 1 | -1, now: number): { intent: Intent; why: string } | undefined {
+  const ai = obs.ai;
+  if (!ai.onGround) return undefined;
+  const floorY = Math.max(ai.y, ...(game.learned?.levels[String(obs.level)]?.platforms ?? []).filter(([a, b]) => b >= ai.levelX - 160 && a <= ai.levelX + 160).map((p) => p[2]));
+  if (ai.y < floorY - 8) {
+    const down = routeIntent(game, obs, mem, rel, sign, now, true);
+    if (down) return { intent: down.intent, why: `wall fight: get down to the floor (y ${floorY}) — ${down.why}` };
+    return { intent: "advance_fire", why: `wall fight: get down to the floor (y ${floorY})` };
+  }
+  const sniper = rel.find((e) => e.category === "hostile" && e.hp > 1 && Math.abs(e.dy) < 24 && Math.abs(e.dx) < 160);
+  if (sniper) {
+    const d = sniper.dx;
+    if (d > 0) {
+      if (d > 96) return { intent: "advance_fire", why: `wall fight: close on the sniper ahead (dx ${d}, hp ${sniper.hp})` };
+      if (d < 40 && canRetreat(game, obs, mem, sign)) return { intent: "retreat", why: `wall fight: sniper ahead too close (dx ${d}) → back off` };
+      return { intent: "hold_fire", why: `wall fight: shooting the sniper ahead (dx ${d}, hp ${sniper.hp})` };
+    }
+    if (-d > 120 && canRetreat(game, obs, mem, sign)) return { intent: "retreat", why: `wall fight: close on the sniper behind (dx ${d}, hp ${sniper.hp})` };
+    if (-d < 32) return { intent: "advance_fire", why: `wall fight: sniper behind too close (dx ${d}) → step away` };
+    return { intent: "aim_back_fire", why: `wall fight: shooting the sniper behind (dx ${d}, hp ${sniper.hp})` };
+  }
+  const cannons = rel.filter((e) => e.category === "hostile" && e.hp >= 8 && e.dy < -40 && e.dx > 0).sort((a, b) => a.dx - b.dx);
+  const cannon = cannons[0];
+  if (cannon) {
+    // 45° spot: dx equal to the height difference. Walking right with UP held fires diagonally; step back when past it.
+    const spot = Math.abs(cannon.dy);
+    const d = cannon.dx;
+    if (d < spot - 10 && canRetreat(game, obs, mem, sign)) return { intent: "retreat", why: `wall fight: past the 45° spot for the cannon (dx ${d}, dy ${cannon.dy}, hp ${cannon.hp}) → step back` };
+    return { intent: "aim_diag_fire", why: `wall fight: diagonal fire at the cannon (dx ${d}, dy ${cannon.dy}, hp ${cannon.hp})` };
+  }
+  const core = rel.find((e) => e.category === "obstacle" && e.hp >= 8) ?? rel.find((e) => e.hp >= 8);
+  if (!core) return undefined;
+  const d = core.dx;
+  const want = 90;
+  if (d > want + 24) return { intent: "advance_fire", why: `wall fight: move up to the core (dx ${d}, hp ${core.hp})` };
+  if (d < want - 28 && canRetreat(game, obs, mem, sign)) return { intent: "retreat", why: `wall fight: too close to the core (dx ${d}) → back off` };
+  return { intent: "hold_fire", why: `wall fight: shooting the core (dx ${d}, dy ${core.dy}, hp ${core.hp})` };
+}
+
+/**
  * Hard survival rules. Returns undefined when nothing is urgent. These override Jev
  * because a 250 ms model round trip is too slow for a bullet 40 px away.
  */
-export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyMemory, now: number): { intent: Intent; why: string } | undefined {
+export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyMemory, now: number): Decision | undefined {
   const r = game.reflex;
   const ai = obs.ai;
   const { sign } = fwdBack(obs);
@@ -304,6 +497,7 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
   //    together with the partner (a lagging player finds the bridge already gone). Where one used
   //    to be and nothing is left: jump the gap from its edge (best effort).
   rememberHazards(obs, mem);
+  if (obs.corridor) return corridorIntent(game, obs, mem, rel, now);
   const hazard = rel.find((e) => e.category === "hazard" && Math.abs(e.dx) < 40 && e.dy > -8 && e.dy < 48);
   if (hazard) {
     if (mem.stillSince && now - mem.stillSince > 250 && ai.onGround && now - mem.lastJumpAt > 700) return { intent: "jump_forward", why: `hazard underfoot (dx ${hazard.dx}) → jump clear` };
@@ -341,13 +535,22 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
     if (body) return { intent: "prone_fire", why: `bullet incoming (dx ${body.e.dx}, y@ ${body.yAt.toFixed(0)})` };
     // A low shot has to be jumped, and the jump (60 frames) must be timed: too early and we land on it.
     const l = low!;
-    if (l.ticks <= 6) return { intent: "jump_forward", why: `low shot (dx ${l.e.dx}, y@ ${l.yAt.toFixed(0)}, ${l.ticks.toFixed(0)} ticks) → jump${jumpIsSafe(rel) ? "" : " (air not clear, no choice)"}` };
-    if (l.ticks <= 12) return { intent: "hold_fire", why: `low shot (dx ${l.e.dx}, ${l.ticks.toFixed(0)} ticks) → jump at the last moment` };
+    if (l.ticks <= 10) return { intent: "jump_forward", why: `low shot (dx ${l.e.dx}, y@ ${l.yAt.toFixed(0)}, ${l.ticks.toFixed(0)} ticks) → jump${jumpIsSafe(rel) ? "" : " (air not clear, no choice)"}` };
+    if (bossActive(obs, mem, now)) return undefined; // wall fight: keep shooting until the jump moment
+    if (l.ticks <= 16) return { intent: "hold_fire", why: `low shot (dx ${l.e.dx}, ${l.ticks.toFixed(0)} ticks) → jump at the last moment` };
     // Not yet: keep our distance from it in one direction (no thrashing) until it is in the jump window.
     const away: 1 | -1 = l.e.dx > 0 ? -1 : 1;
     const dir: 1 | -1 = away < 0 && !canRetreat(game, obs, mem, sign) ? 1 : away;
     mem.commit = { intent: dir === sign ? "advance_fire" : "retreat", why: `low shot far (dx ${l.e.dx}, ${l.ticks.toFixed(0)} ticks) → ${dir === away ? "back off" : "cannot back off, push on"}`, until: now + 300 };
     return { intent: mem.commit.intent, why: mem.commit.why };
+  }
+  // 1a. A soldier jumping up at us from below (they climb ledges in one leap): step away from where it lands.
+  const riser = rel.find((e) => e.category === "hostile" && Math.abs(e.dx) < 30 && e.dy > 6 && e.dy < 56 && e.vy < -3);
+  if (riser) {
+    const away: 1 | -1 = riser.dx >= 0 ? -1 : 1;
+    if (away < 0 && canRetreat(game, obs, mem, sign)) return { intent: "retreat", why: `hostile leaping up at us (dx ${riser.dx}, dy ${riser.dy}) → step back` };
+    if (away > 0) return { intent: "advance_fire", why: `hostile leaping up at us (dx ${riser.dx}, dy ${riser.dy}) → step on` };
+    return { intent: "hold_fire", why: `hostile leaping up at us (dx ${riser.dx}, dy ${riser.dy}), no room → shoot` };
   }
   // 1b. A hostile dropping onto us from a ledge above (soldiers jump down): step back out from under it.
   const diver = rel.find((e) => e.category === "hostile" && Math.abs(e.dx) < 28 && e.dy < -12 && e.dy > -56 && e.vy > 0);
@@ -362,24 +565,32 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
     if (ai.onGround && now - mem.lastJumpAt > 900 && jumpIsSafe(rel)) return { intent: "jump_back", why: `hostile dropping in (dx ${diver.dx}, dy ${diver.dy}) → hop back` };
     return { intent: "retreat", why: `hostile dropping in (dx ${diver.dx}, dy ${diver.dy})` };
   }
+  // 1bb. Locked screen with something big to kill (a wall with cannons and a core, a turret guarding
+  //      it): the run-and-gun rules (keep moving, keep 72 px from anything heavy) only pace up and
+  //      down under the cannons. Fight it instead: same-height shooters first, then the core.
+  if (obs.levelScrollX === mem.lastScroll) mem.scrollStillSince ||= now;
+  else mem.scrollStillSince = 0;
+  mem.lastScroll = obs.levelScrollX;
+  const boss = bossIntent(game, obs, mem, rel, sign, now);
+  if (boss) return boss;
   // 1c. The platform ends ahead (learned map). Prefer a jump to a platform at the same height or higher
   //     (the high road has fewer pits); walk off only onto ground straight below; never off into nothing.
   const edge = edgeAhead(game, obs, sign);
-  const partnerBehind = obs.human.alive && (obs.human.x - ai.x) * sign < -16;
   const knownDrop = gapAhead(game, obs, mem, sign, 60);
   if (edge && ai.onGround) {
+    // The planned route knows the way on (including "go back and climb"): it beats the local guesswork.
+    const planned = routeIntent(game, obs, mem, rel, sign, now, true);
+    if (planned) return planned;
     const up = edge.landing !== undefined && edge.landing.dy <= 0;
     if (edge.landing && (up || !edge.dropOk)) {
-      if (partnerBehind && edge.dist <= 10) return stopSafely(game, obs, mem, rel, sign, now, `platform ends, partner behind → wait here`);
       // Take off as soon as a running jump reaches the next ledge (before the edge when it is close), never past it.
       const kind = jumpKindFor(edge, ai.levelX, sign);
-      if (!partnerBehind && edge.dist > -6 && kind !== "early") {
+      if (edge.dist > -6 && kind !== "early") {
         if (kind && (jumpIsSafe(rel) || edge.dist <= 2)) return { intent: kind, why: `platform ends → ${kind === "jump_up" ? "jump straight up onto the ledge" : "jump to the next one"} (dx ${edge.landing.dx.toFixed(0)}, dy ${edge.landing.dy})` };
         if (kind) return stopSafely(game, obs, mem, rel, sign, now, `platform ends, bullets in the air → wait before jumping`);
         if (edge.dist <= 10) return stopSafely(game, obs, mem, rel, sign, now, `platform ends, no jump lands on the next ledge from here → stop`);
       }
     } else if (!edge.dropOk && edge.dist <= 14) {
-      if (partnerBehind) return stopSafely(game, obs, mem, rel, sign, now, `platform ends (${edge.dist.toFixed(0)}px), partner behind → wait here`);
       if (knownDrop && knownDrop.kind === "hop") return undefined; // the hop rule below takes it from the edge
       if (knownDrop && knownDrop.kind === "pit") {
         if (obs.human.alive && obs.human.y < ai.y - 40 && now - mem.lastJumpAt > 900 && jumpIsSafe(rel)) return { intent: "jump_forward", why: `dead end, partner above → try to climb` };
@@ -407,7 +618,7 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
       if (dir !== 0) {
         mem.aimedDir = dir;
         mem.commit = { intent: dir === sign ? "advance_fire" : "retreat", why: `shooter ${aimed.dy > 0 ? "below" : "above"} (dx ${aimed.dx}, dy ${aimed.dy}) aims at us → keep moving ${dir > 0 ? "on" : "back"}`, until: now + 450 };
-        return { intent: mem.commit.intent, why: mem.commit.why };
+        return { intent: mem.commit.intent, why: mem.commit.why, plan: true };
       }
     }
   }
@@ -438,6 +649,10 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
   } else if (gap && gap.kind === "pit") {
     // Dead end at this height: never walk in; get up to the partner's ledge instead.
     if (gap.dxStart < 40) {
+      const planned = routeIntent(game, obs, mem, rel, sign, now, true);
+      if (planned) return planned;
+      // On a mapped ledge with the route continuing along it: the learned pit zone is stale here (zones span whole regions).
+      if (routeAhead(game, obs, mem.failedHops)) return undefined;
       if (edge?.dropOk) return undefined; // ground straight below the edge: walking off is fine
       const kind = edge ? jumpKindFor(edge, ai.levelX, sign) : undefined;
       if (kind === "early") return undefined;
@@ -448,9 +663,10 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
   } else if (gap) {
     if (gap.inside) return { intent: "advance_fire", why: `on the bridge (${gap.dxEnd.toFixed(0)}px to go) → keep moving` };
     if (gap.dxStart < 24) {
-      if (gap.partner === "beyond" && !rel.some((e) => e.category === "hazard")) return { intent: "hold_fire", why: `pit ahead (${gap.width}px), bridge gone → wait at the edge` };
-      if (gap.partner === "on" || gap.partner === "near" || rel.some((e) => e.category === "hazard")) return { intent: "advance_fire", why: `bridge edge, partner ${gap.partner} → cross now` };
-      return { intent: "hold_fire", why: `bridge edge, partner ${gap.partner} → wait, cross together` };
+      // Bridge gone and the partner beyond it: with lives to spare, walking off drops into the river below (level 1) and respawns further on.
+      if (gap.partner === "beyond" && !rel.some((e) => e.category === "hazard")) return ai.lives >= 3 ? { intent: "advance_fire", why: `bridge gone (partner beyond) → drop off the edge and respawn ahead` } : { intent: "hold_fire", why: `pit ahead (${gap.width}px), bridge gone → wait at the edge`, plan: true };
+      if (gap.partner === "on" || gap.partner === "near" || gap.partner === "none" || rel.some((e) => e.category === "hazard")) return { intent: "advance_fire", why: `bridge edge, partner ${gap.partner} → cross now` };
+      return { intent: "hold_fire", why: `bridge edge, partner ${gap.partner} → wait, cross together`, plan: true };
     }
     if (gap.partner === "on" || (gap.partner === "near" && obs.human.xVel === sign)) return { intent: "advance_fire", why: `bridge in ${gap.dxStart.toFixed(0)}px, partner crossing → sprint` };
   }
@@ -463,7 +679,7 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
   const heavy = rel.find((e) => e.category === "hostile" && keep(e) > 0 && Math.abs(e.dx) < keep(e) && e.dy > -28 && e.dy < 24);
   if (heavy) {
     mem.commit = { intent: heavy.dx >= 0 ? "retreat" : "advance_fire", why: `stationary shooter #${heavy.type.toString(16)} at dx ${heavy.dx}, dy ${heavy.dy} → keep ${keep(heavy)}px`, until: now + 500 };
-    return { intent: mem.commit.intent, why: mem.commit.why };
+    return { intent: mem.commit.intent, why: mem.commit.why, plan: true };
   }
   // 3. Sniper / turret above us: straight up when overhead, diagonal when it is ahead and above.
   const above = rel.find((e) => e.category === "hostile" && Math.abs(e.dx) < 24 && e.dy < -20 && e.dy > -90);
@@ -477,7 +693,7 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
 }
 
 /** Default plan when no model has a fresh opinion. */
-export function heuristicIntent(game: GameProfile, obs: Observation, mem: PolicyMemory, now: number): { intent: Intent; why: string } {
+export function heuristicIntent(game: GameProfile, obs: Observation, mem: PolicyMemory, now: number): Decision {
   const r = game.reflex;
   const ai = obs.ai;
   const { sign } = fwdBack(obs);
@@ -534,6 +750,9 @@ export function heuristicIntent(game: GameProfile, obs: Observation, mem: Policy
     if (dxP < -r.followDistance) return { intent: "hold_fire", why: `ahead of partner by ${-dxP}px, covering` };
     if (dxP > r.followDistance * 2) return { intent: "follow_partner", why: `partner ${dxP}px ahead` };
   }
+  // The planned route needs a hop or a step back here: take it.
+  const planned = routeIntent(game, obs, mem, rel, sign, now);
+  if (planned) return planned;
   // Stuck against something while trying to advance: hop.
   if (mem.stillSince && now - mem.stillSince > 1500 && ai.onGround && now - mem.lastJumpAt > 1200) {
     const edge = edgeAhead(game, obs, sign);
@@ -603,6 +822,8 @@ export function actionFor(game: GameProfile, obs: Observation, intent: Intent, m
       const onHazard = relative(obs, sign).some((e) => e.category === "hazard" && Math.abs(e.dx) < 40 && e.dy > -8 && e.dy < 48);
       if (obs.human.alive && !ai.invincible && !onHazard) {
         const dxP = (obs.human.x - ai.x) * sign;
+        // Far ahead of the partner: standing still to wait is what gets the buddy shot; walk back to them instead.
+        if (dxP < -game.reflex.followDistance * 1.5) return { hold: [...walk(back), ...holdFire], turbo, tag: `${back}+${fire}`, reason: "rejoining partner" };
         if (dxP < -game.reflex.followDistance) return face(sign, "waiting for partner", "cover");
       }
       return { hold: [...walk(fwd), ...holdFire], turbo, tag: `${fwd}+${fire}`, reason: "advance" };
@@ -616,6 +837,15 @@ export function actionFor(game: GameProfile, obs: Observation, intent: Intent, m
     }
     case "hold_fire":
       return face(sign, "hold ground", fire);
+    case "aim_back_fire":
+      return face((-sign) as 1 | -1, "shoot behind", `${back}:${fire}`);
+    case "prone_back_fire": {
+      // Turn first (a tap of the back key), then lie down: prone fire goes the way the sprite faces.
+      const turned = face((-sign) as 1 | -1, "prone, shoot behind", `${back}:${prone}`);
+      if (turned.tag.endsWith(":turn")) return turned;
+      mem.proneSince ||= now;
+      return { hold: [prone, ...holdFire], turbo, tag: `${prone}+${fire}`, reason: "prone, shoot behind" };
+    }
     case "aim_up_fire":
       return { hold: [up, ...holdFire], turbo, tag: `${up}+${fire}`, reason: "aim up" };
     case "aim_diag_fire":

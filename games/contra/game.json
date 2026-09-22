@@ -31,6 +31,13 @@
     "bossDefeated": "0x3b",
     "enemies": { "count": 16, "routine": "0x04b8", "x": "0x033e", "y": "0x0324", "type": "0x0528", "hp": "0x0578" }
   },
+  "stages": {
+    "note": "Per-level briefing for Jev (kind drives the reflex mode; objective and tips are shown to Jev as text).",
+    "0": { "kind": "side", "name": "Jungle", "objective": "Run right to the wall at the end (x≈3200). Two exploding bridges at x 770–910 and 1060–1200: cross them without stopping. After the second bridge the ground splits: the HIGH road (ledges at y≤100) leads on; the water and the low rock ledges (y≥164) dead-end at cliffs and pits. At the end a wall with two cannons (y 128) and a core (y 176) blocks the way, with a sniper crouching at the left of the screen: fight from the floor, sniper first, then the cannons with diagonal fire from the 45° spot, then the core.", "tips": ["Standing still under a shooter on another height is what kills here.", "A player who lags behind the partner finds the bridge already gone."] },
+    "1": { "kind": "corridor", "name": "Base 1", "objective": "A 3D corridor seen from behind: the buddy walks left/right on one floor line and fires INTO the screen. Each screen has wall targets (sensors, hp 4, and a core, hp 8): line up under one and fire until they are gone, then run in with UP. Enemy shots come down the screen toward the buddy's column: sidestep them. Soldiers run across the back and drop down to the floor line.", "tips": ["dx to a target is what matters; dy only says how far up the wall it is.", "The last screen is the boss wall: several sensors and a core, more shots."] },
+    "2": { "kind": "vertical", "name": "Waterfall", "objective": "Climb: the level scrolls UP. Jump from ledge to ledge toward the partner's side; the boss is at the top." },
+    "3": { "kind": "corridor", "name": "Base 2", "objective": "Same as Base 1: line up under wall targets, fire, sidestep incoming shots, run in with UP when the screen is clear." }
+  },
   "phases": {
     "title": { "gameRoutine": [0, 1, 2, 3] },
     "loading": { "gameRoutine": [4, 5], "levelRoutine": [0, 1, 2, 3] },

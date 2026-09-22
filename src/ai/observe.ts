@@ -98,6 +98,8 @@ export interface Observation {
   playerMode: number;
   level: number;
   levelDirection: "right" | "up";
+  /** Base corridor (3D view): the player stands on one floor line and fires into the screen. */
+  corridor: boolean;
   ai: PlayerObs;
   human: PlayerObs;
   enemies: EnemyObs[];
@@ -322,6 +324,7 @@ export function observe(game: GameProfile, bytes: Uint8Array, prev?: Observation
     playerMode: game.ram.playerMode ? ram.byte(parseAddr(game.ram.playerMode)) : 1,
     level,
     levelDirection: scrollType === 1 ? "up" : "right",
+    corridor: game.ram.locationType ? ram.byte(parseAddr(game.ram.locationType)) === 1 : false,
     ai: aiNow,
     human: playerOf(game, ram, humanIdx, phase, levelScrollX),
     enemies,
@@ -379,6 +382,7 @@ function observeTankGame(game: GameProfile, t: TankProfile, ram: RamView, phase:
     playerMode: game.ram.playerMode ? ram.byte(parseAddr(game.ram.playerMode)) : 1,
     level: game.ram.level ? ram.byte(parseAddr(game.ram.level)) : 0,
     levelDirection: "right",
+    corridor: false,
     ai,
     human: player(humanIdx),
     enemies,

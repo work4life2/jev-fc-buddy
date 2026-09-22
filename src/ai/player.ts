@@ -1,10 +1,11 @@
 import { getConfig } from "../config.js";
 import { logger } from "../log.js";
 import { genreOf, type GameProfile } from "../games/registry.js";
-import { dangersNear, jevDecide, jevEnabled, type JevAction, type JevDecision } from "./jev.js";
+import { dangersNear, jevDecide, jevEnabled, stageBrief, type JevAction, type JevDecision } from "./jev.js";
+import { describeHop, hopKey, routeAhead } from "./route.js";
 import { actionCriteria } from "./criteria.js";
 import { observe, type Observation } from "./observe.js";
-import { actionFor, edgeAhead, gapAhead, heuristicIntent, IDLE, newMemory, respawnSteer, sameAction, survivalIntent, type Action, type Button, type Intent, type PolicyMemory } from "./policy.js";
+import { actionFor, edgeAhead, fallSteer, gapAhead, heuristicIntent, IDLE, newMemory, respawnSteer, sameAction, survivalIntent, type Action, type Button, type Intent, type PolicyMemory } from "./policy.js";
 import { newTankMemory, TANK_INTENTS, tankDecide, type TankIntent, type TankMemory } from "./tankPolicy.js";
 
 const log = logger("buddy");
@@ -137,8 +138,18 @@ export class BuddyBrain {
           return;
         }
         if (!obs.ai.alive) {
+          if (this.mem.wasAlive) {
+            this.mem.fallTarget = undefined; // a new fall (the respawn drop) picks its own ledge
+            // Died within 2 s of a route jump, at the bottom of the screen: that hop does not work, route around it.
+            if (this.mem.lastHop && now - this.mem.lastHop.at < 2000 && obs.ai.y >= 200) {
+              this.mem.failedHops.add(hopKey(this.mem.lastHop.hop));
+              this.op("system", `route: the jump ${describeHop({ here: this.mem.lastHop.hop.from, next: this.mem.lastHop.hop, hops: 0, endX: 0, cost: 0 }, this.mem.lastHop.hop.atX)} ended in a fall → avoided from now on`);
+            }
+            this.mem.lastHop = undefined;
+          }
+          this.mem.wasAlive = false;
           const steer = respawnSteer(this.game, obs, this.mem);
-          if (steer) this.apply({ hold: [steer.dir], turbo: [], tag: `${steer.dir}`, reason: steer.why }, "reflex");
+          if (steer) this.apply({ hold: steer.dir ? [steer.dir] : [], turbo: [], tag: steer.dir ?? "still", reason: steer.why }, "reflex");
           else this.apply(IDLE, "reflex");
           return;
         }
@@ -222,12 +233,14 @@ export class BuddyBrain {
     // 1. Ask Jev jevHz times a second with up to two requests in flight (answers ~300–700 ms apart).
     const sign: 1 | -1 = 1;
     const gap = gapAhead(this.game, obs, this.mem, sign);
+    const urgent = survivalIntent(this.game, obs, this.mem, now);
     if (this.useJev && this.jevInflight < 2 && now - this.jevLastAt >= 1000 / ai.jevHz) {
       this.jevInflight++;
       this.jevLastAt = now;
       this.stats.jevCalls++;
       const askedAt = now;
-      void jevDecide(this.game, obs, { recent: this.recent.slice(-5), gap, edge: edgeAhead(this.game, obs, sign), dangers: dangersNear(this.game, obs), criteria: actionCriteria(this.game, obs, this.mem) })
+      const planNow = urgent ?? heuristicIntent(this.game, obs, this.mem, now);
+      void jevDecide(this.game, obs, { recent: this.recent.slice(-5), gap, edge: edgeAhead(this.game, obs, sign), dangers: dangersNear(this.game, obs), criteria: actionCriteria(this.game, obs, this.mem), plan: { intent: planNow.intent, why: planNow.why, reflex: urgent !== undefined && !urgent.plan }, route: routeAhead(this.game, obs), stage: stageBrief(this.game, obs) })
         .then((d) => {
           if (!d || this.stopped) return;
           this.stats.jevIn += d.usage.input;
@@ -253,8 +266,33 @@ export class BuddyBrain {
     let src: "jev" | "reflex" = "reflex";
     let why = "";
     const fresh = this.jev && now - this.jev.at < 1200 ? this.jev.decision : undefined;
-    const urgent = survivalIntent(this.game, obs, this.mem, now);
-    if (urgent) {
+    // Falling without having jumped (respawn drop, walked off a ledge): steer to ground with a way on.
+    // The game's jump flag stays clear while falling, so falling = y increasing.
+    this.mem.fallTicks = this.mem.lastY >= 0 && obs.ai.y - this.mem.lastY >= 4 ? this.mem.fallTicks + 1 : 0;
+    this.mem.lastY = obs.ai.y;
+    if (!this.mem.wasAlive) this.mem.respawnUntil = now + 1300; // back to life: the respawn drop from the top of the screen
+    this.mem.wasAlive = true;
+    const falling = this.mem.fallTicks >= 2 || now < this.mem.respawnUntil;
+    if (!falling && obs.ai.onGround && this.mem.fallTicks === 0) this.mem.fallTarget = undefined;
+    if (falling && now - this.mem.lastJumpAt > 1100) {
+      const steer = fallSteer(this.game, obs, this.mem);
+      if (steer) {
+        const fire = this.game.buttons.fire as Button;
+        this.apply({ hold: steer.dir ? [steer.dir] : [], turbo: this.game.reflex.turboFire ? [fire] : [], tag: `${steer.dir ?? "still"}+${fire}`, reason: steer.why }, "reflex");
+        return;
+      }
+    }
+    // Reflexes (a bullet, a hazard, something about to touch us) always win. A plan (where to stand,
+    // which target, which ledge) is the code's proposal: a fresh, confident Jev answer overrides it.
+    const jevOver = urgent?.plan && fresh ? this.jevPick(fresh) : undefined;
+    if (urgent && !urgent.plan) {
+      intent = urgent.intent;
+      why = urgent.why;
+    } else if (urgent && jevOver && jevOver !== urgent.intent && (fresh!.probabilities[jevOver] ?? 0) >= 0.45) {
+      intent = jevOver as Intent;
+      src = "jev";
+      why = `Jev ${jevOver} over plan [${urgent.why}]`;
+    } else if (urgent) {
       intent = urgent.intent;
       why = urgent.why;
     } else if (fresh && fresh.sprintNow > 0.65) {
