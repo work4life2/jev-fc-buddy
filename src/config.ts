@@ -157,7 +157,7 @@ export function getConfig(): Config {
       price: env("SERVICE_PRICE", "1"),
       currency: env("SERVICE_CURRENCY", "USDC"),
       deliveryDays: envNum("SERVICE_DELIVERY_DAYS", 1),
-      category: env("SERVICE_CATEGORY", "Games & Entertainment"),
+      category: env("SERVICE_CATEGORY", "Automation & Ops"),
       skillTag: env("SERVICE_SKILL_TAG", "ai-game-buddy"),
     },
   };
