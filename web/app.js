@@ -1,5 +1,6 @@
-/* Jev FC Buddy — play page. Vanilla JS: jsnes runs the game in the browser; the server runs the AI
-   that holds controller 2 (each "act" names its controller: menu taps may go to controller 1). The browser reports RAM at a fixed rate and applies the AI's inputs. */
+import { GameController } from "./vendor/ai/control.js";
+import { observe } from "./vendor/ai/observe.js";
+/* The local controller executes skills next to jsnes. The server selects tactical goals. */
 (() => {
   const $ = (id) => document.getElementById(id);
   const BTN = { A: 0, B: 1, SELECT: 2, START: 3, UP: 4, DOWN: 5, LEFT: 6, RIGHT: 7 };
@@ -137,10 +138,62 @@
   const aiTurbo = new Set();
   let aiController = 0; // controller the current act targets (menu taps may use a different one)
   let frameNo = 0;
+  let localControl, localObs, localStepAt = 0, localNextFrame = 0;
+  let localAuthorized = false;
+  let localActionKey = "";
+  const execution = { jevTicks: 0, reflexTicks: 0, rejectedPlans: 0 };
+  let lookahead, lookaheadReady = false, lookaheadBusy = false, forecast;
+  let nextForecastAt = 0, forecastInterval = 1500;
+
+  function requestForecast() {
+    if (!lookaheadReady || lookaheadBusy || !localAuthorized || !localObs?.ai.alive || localControl.candidates.length < 2 || Date.now() < nextForecastAt) return;
+    nextForecastAt = Date.now() + forecastInterval;
+    lookaheadBusy = true;
+    lookahead.postMessage({ type: "forecast", input: {
+      snapshot: state.nes.toJSON(), controllers: [1, 2].map(c => [...state.nes.controllers[c].state]),
+      game: localControl.game, observation: localObs, memory: localControl.mem, candidates: localControl.candidates, frame: frameNo,
+    } });
+  }
+
+  function ramSnapshot() {
+    const mem = state.nes.cpu.mem;
+    const out = new Uint8Array(state.obsRanges.reduce((n, [a, b]) => n + b - a, 0));
+    let offset = 0;
+    for (const [a, b] of state.obsRanges) { out.set(mem.slice(a, b), offset); offset += b - a; }
+    return out;
+  }
+
+  function localTick() {
+    if (!localControl || frameNo < localNextFrame) return;
+    localNextFrame += 2.5;
+    localObs = observe(localControl.game, ramSnapshot(), localObs);
+    const step = localControl.step(localObs);
+    if (!step.plan) $("goalStatus").textContent = "Following the route with local survival control.";
+    requestForecast();
+    if (localObs.phase !== "playing") return;
+    const permitted = localAuthorized && state.ws?.readyState === 1 && state.expiresAt > Date.now();
+    const action = permitted ? step.action : { hold: [], turbo: [], tag: "paused" };
+    if (permitted) execution[step.source === "jev" ? "jevTicks" : "reflexTicks"]++;
+    aiController = state.session.game.players.ai;
+    aiHeld.clear(); aiTurbo.clear();
+    for (const b of action.hold) aiHeld.add(BTN[b]);
+    for (const b of action.turbo) aiTurbo.add(BTN[b]);
+    const key = `${step.source}:${action.hold}:${action.turbo}`;
+    if (key !== localActionKey) {
+      localActionKey = key;
+      padShow({ ...action, src: step.source, controller: aiController });
+      if (permitted && Date.now() - localStepAt > 150) {
+        localStepAt = Date.now();
+        pushOp(step.source, action.reason || action.tag, step.plan ? `Goal: ${step.plan}` : "");
+      }
+    }
+  }
 
   function onServer(m) {
     switch (m.type) {
       case "session":
+        localAuthorized = true;
+        localControl?.resetPlan();
         state.expiresAt = new Date(m.expiresAt).getTime();
         $("hudCoins").textContent = `🪙 ${m.remaining} left`;
         break;
@@ -149,7 +202,12 @@
         $("hudJev").className = m.jev ? "on" : "";
         $("hudJev").title = `phase: ${m.phase}`;
         break;
+      case "plan":
+        if (localControl && localObs && localAuthorized && localControl.accept(m.selection, localObs, frameNo, Date.now())) $("goalStatus").textContent = `Jev goal: ${m.selection.tactic.description}`;
+        else execution.rejectedPlans++;
+        break;
       case "act":
+        if (localControl && localObs?.phase === "playing") break;
         if (m.controller && m.controller !== aiController) {
           // switching controllers: let go of everything on the old one first
           if (aiController && state.nes) for (let b = 0; b < 8; b++) state.nes.buttonUp(aiController, b);
@@ -161,9 +219,12 @@
         padShow(m);
         break;
       case "op":
+        if (localControl && m.src !== "system" && !m.detail?.selected) break;
         pushOp(m.src, m.text, m.detail ? Object.values(m.detail).filter((v) => typeof v === "string").join(" ") : "");
         break;
       case "expired":
+        localAuthorized = false;
+        localControl?.resetPlan();
         aiHeld.clear(); aiTurbo.clear();
         for (const b of Object.values(padEls)) b.classList.remove("lit", "turbo");
         if (m.reason === "time is up") { state.expiresAt = 0; showOverlay("TIME'S UP", "This coin is spent. Insert another coin to keep playing: the game stays exactly where it is."); }
@@ -287,6 +348,20 @@
     let bin = "";
     for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 0x8000));
     nes.loadROM(bin);
+    if (s.game.genre !== "tank" && s.game.controlProfile) {
+      localControl = new GameController(s.game.controlProfile);
+      if (typeof Worker !== "undefined") {
+        lookahead = new Worker("/lookahead-worker.js");
+        lookahead.onmessage = ({ data }) => {
+          if (data.type === "ready") lookaheadReady = true;
+          if (data.type === "forecast") { forecast = data; forecastInterval = Math.max(1500, data.elapsedMs * 3); }
+          if (data.type === "error") { lookaheadReady = false; lookahead.terminate(); }
+          lookaheadBusy = false;
+        };
+        lookahead.onerror = () => { lookaheadReady = false; lookaheadBusy = false; lookahead.terminate(); };
+        lookahead.postMessage({ type: "init", rom: bin });
+      }
+    }
     state.running = true;
     pushOp("system", `${s.game.title} loaded · you are P${s.game.players.human}, AI is P${s.game.players.ai}`, "");
     setupInput(s.game);
@@ -305,6 +380,7 @@
     last += frames * (1000 / 60);
     if (now - last > 200) last = now;
     while (frames-- > 0) {
+      localTick();
       applyAi();
       pollGamepad();
       state.nes.frame();
@@ -323,15 +399,10 @@
 
   function report() {
     if (!state.running || !state.ws || state.ws.readyState !== 1) return;
-    const mem = state.nes.cpu.mem;
-    let total = 0;
-    for (const [a, b] of state.obsRanges) total += b - a;
-    const out = new Uint8Array(total);
-    let o = 0;
-    for (const [a, b] of state.obsRanges) { out.set(mem.slice(a, b) /* jsnes 1.x: plain Array, 2.x: Uint8Array */, o); o += b - a; }
+    const out = ramSnapshot();
     let bin = "";
     for (let i = 0; i < out.length; i++) bin += String.fromCharCode(out[i]);
-    ws_send({ type: "obs", ram: btoa(bin) });
+    ws_send({ type: "obs", ram: btoa(bin), frame: frameNo, epoch: localControl?.epoch, execution: localControl ? execution : undefined, forecast: forecast && frameNo - forecast.frame <= 60 ? forecast : undefined });
   }
 
   function tickHud() {

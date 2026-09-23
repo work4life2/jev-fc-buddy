@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
+import { Worker } from "node:worker_threads";
 import { BuddyBrain, type BuddyMessage } from "../ai/player.js";
 import { observe, parseAddr, type Observation } from "../ai/observe.js";
 import { jevEnabled } from "../ai/jev.js";
@@ -20,6 +21,8 @@ import type { Button } from "../ai/policy.js";
 
 const jsnes = createRequire(import.meta.url)("jsnes") as { NES: new (o: { onFrame(fb: unknown): void; onAudioSample: null }) => Nes };
 interface Nes {
+  toJSON(): unknown;
+  controllers: Record<number, { state: number[] }>;
   loadROM(bin: string): void;
   frame(): void;
   buttonDown(c: number, b: number): void;
@@ -65,6 +68,8 @@ export interface JumpRecord {
 }
 
 export interface EpisodeReport {
+  decisions?: ReturnType<BuddyBrain["diagnostics"]>;
+  maxFrames?: number;
   game: string;
   mode: "solo" | "duo";
   seed: number;
@@ -83,6 +88,7 @@ export interface EpisodeReport {
   actions: Record<string, number>;
   /** The buddy stopped making progress (alive, same level-x for 30 s): where. */
   stuckAt?: number;
+  stuckState?: { observation: Observation; trail: string[] };
   /** Levels finished during the episode. */
   levelsCleared?: number;
   wallMs: number;
@@ -130,7 +136,9 @@ export async function runEpisode(o: HarnessOptions): Promise<EpisodeReport> {
   nes.loadROM(bin);
   const mem = nes.cpu.mem;
   const started = realNow();
-  virtual = !useJev;
+  // Both arms make decisions on the SAME frame clock. Network-enabled runs are
+  // merely paced; wall-clock timer jitter must not change reflex thresholds.
+  virtual = true;
   virtualMs = realNow();
 
   let frame = 0;
@@ -207,6 +215,12 @@ export async function runEpisode(o: HarnessOptions): Promise<EpisodeReport> {
   };
   // The harness handled the menus itself; the brain only ever sees the game running.
   const brain = new BuddyBrain({ game, send: o.explore ? () => {} : send, jev: useJev && !o.explore, quiet: true });
+  const predictor = useJev && !game.tank ? new Worker(new URL("./forecastWorker.js", import.meta.url), { workerData: { rom: bin } }) : undefined;
+  let predictorBusy = false;
+  let predictorEnabled = !!predictor;
+  let forecastAt = 0;
+  predictor?.on("message", value => { predictorBusy = false; brain.onForecast(value); });
+  predictor?.on("error", () => { predictorEnabled = false; predictorBusy = false; });
 
   const deaths: DeathRecord[] = [];
   const ground: Record<string, Record<string, number[]>> = {};
@@ -224,6 +238,7 @@ export async function runEpisode(o: HarnessOptions): Promise<EpisodeReport> {
   const maxFrames = o.maxFrames ?? 60 * 240;
   let progressAt = 0;
   let stuckAt: number | undefined;
+  let stuckState: EpisodeReport["stuckState"];
   let lastBigHp = 0;
   let levelsCleared = 0;
   const humanC = game.players.human;
@@ -304,7 +319,7 @@ export async function runEpisode(o: HarnessOptions): Promise<EpisodeReport> {
         const bigHp = obs.enemies.filter((e) => (e.category === "hostile" || e.category === "obstacle") && e.hp >= 8).reduce((n, e) => n + e.hp, 0);
         if (bigHp < lastBigHp) progressAt = frame;
         lastBigHp = bigHp;
-        if (frame - progressAt > 60 * 30 && stuckAt === undefined) stuckAt = obs.ai.levelX;
+        if (frame - progressAt > 60 * 30 && stuckAt === undefined) { stuckAt = obs.ai.levelX; stuckState = { observation: obs, trail: [...trail] }; }
         if (obs.ai.x === lastX) stillFrames += 2.5;
         else stillFrames = 0;
         lastX = obs.ai.x;
@@ -371,7 +386,15 @@ export async function runEpisode(o: HarnessOptions): Promise<EpisodeReport> {
     }
     prev = obs;
     lastAct = obs;
-    brain.onObservation(snapshot());
+    brain.onObservation(snapshot(), frame);
+    if (predictorEnabled && !predictorBusy && frame - forecastAt >= 90) {
+      const planning = brain.planningSnapshot();
+      if (planning.observation?.ai.alive && planning.candidates.length > 1) {
+        predictorBusy = true;
+        forecastAt = frame;
+        predictor!.postMessage({ ...planning, snapshot: nes.toJSON(), controllers: [1, 2].map(c => [...nes.controllers[c]!.state]), game, frame });
+      }
+    }
     return obs;
   };
 
@@ -407,6 +430,8 @@ export async function runEpisode(o: HarnessOptions): Promise<EpisodeReport> {
   }
   if (prev?.ai.alive) distance += Math.max(0, lifeMaxX - lifeStartX);
   brain.stop();
+  await brain.settled();
+  if (predictor) await predictor.terminate();
   virtual = false;
-  return { game: game.id, mode: o.mode, seed: o.seed, jev: useJev, frames: frame, level, progress, distance, deaths, jumps, partnerDeaths, ground, actions, stuckAt, levelsCleared, wallMs: realNow() - started };
+  return { game: game.id, mode: o.mode, seed: o.seed, jev: useJev, frames: frame, level, progress, distance, deaths, jumps, partnerDeaths, ground, actions, stuckAt, stuckState, levelsCleared, maxFrames, decisions: brain.diagnostics(), wallMs: realNow() - started };
 }

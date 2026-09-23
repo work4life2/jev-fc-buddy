@@ -75,7 +75,7 @@ export function platformAt(platforms: Platform[], x: number, y: number): Platfor
   return platforms.find(([a, b, py]) => x >= a - 6 && x <= b + 6 && Math.abs(py - y) <= 4);
 }
 
-const cache = new WeakMap<object, { level: number; blocked: string; platforms: Platform[]; next: Map<Platform, Hop | null>; cost: Map<Platform, number> }>();
+const cache = new WeakMap<object, { level: number; blocked: string; minX: number; platforms: Platform[]; next: Map<Platform, Hop | null>; cost: Map<Platform, number> }>();
 
 /** Key of a hop, for the runtime block list (a hop that ended in a fall this session). */
 export function hopKey(h: Hop): string {
@@ -83,18 +83,19 @@ export function hopKey(h: Hop): string {
 }
 
 /** The platform graph of a level, built once per learned map (and per set of blocked hops). */
-function graphFor(game: GameProfile, level: number, blocked?: Set<string>): { level: number; blocked: string; platforms: Platform[]; next: Map<Platform, Hop | null>; cost: Map<Platform, number> } | undefined {
+function graphFor(game: GameProfile, level: number, blocked?: Set<string>, minX = 0): { level: number; blocked: string; minX: number; platforms: Platform[]; next: Map<Platform, Hop | null>; cost: Map<Platform, number> } | undefined {
   const L = game.learned?.levels[String(level)];
   if (!L?.platforms?.length) return undefined;
   const blockedKey = blocked ? [...blocked].sort().join("|") : "";
   let c = cache.get(L);
-  if (!c || c.level !== level || c.blocked !== blockedKey) {
-    const platforms = (L.platforms as Platform[]).filter(([a, b]) => b - a >= 24);
+  if (!c || c.level !== level || c.blocked !== blockedKey || c.minX !== minX) {
+    const platforms = (L.platforms as Platform[]).filter(([a, b]) => b - a >= 24 && b >= minX);
+    if (!platforms.length) return undefined;
     const badJumps = L.badJumps ?? [];
     const bridges = (game.terrain?.gaps?.[String(level)] ?? []).filter((z) => z.length < 5 || z[4] === "bridge").map((z) => [z[0], z[1]] as [number, number]);
     // Goal: the platform reaching furthest right. BFS backwards from it gives every node's next hop.
     const goal = platforms.reduce((g, p) => (p[1] > g[1] ? p : g), platforms[0]!);
-    const hops = platforms.map((_, i) => hopsFrom(platforms, i, badJumps, bridges).filter((h) => !blocked?.has(hopKey(h))));
+    const hops = platforms.map((_, i) => hopsFrom(platforms, i, badJumps, bridges).filter((h) => h.atX >= minX && !blocked?.has(hopKey(h))));
     // Cheapest route by distance walked (a hop costs a fixed 40 px on top; walking back costs double):
     // Dijkstra backwards from the goal, so every platform knows its next hop.
     const next = new Map<Platform, Hop | null>();
@@ -120,7 +121,7 @@ function graphFor(game: GameProfile, level: number, blocked?: Set<string>): { le
         }
       });
     }
-    c = { level, blocked: blockedKey, platforms, next, cost };
+    c = { level, blocked: blockedKey, minX, platforms, next, cost };
     cache.set(L, c);
   }
   return c;
@@ -129,7 +130,8 @@ function graphFor(game: GameProfile, level: number, blocked?: Set<string>): { le
 /** Cheapest route from the buddy's platform toward the furthest known ground on this level. */
 export function routeAhead(game: GameProfile, obs: Observation, blocked?: Set<string>): RouteInfo | undefined {
   if (obs.levelDirection !== "right") return undefined;
-  const c = graphFor(game, obs.level, blocked);
+  // A shared screen cannot scroll back: a route through ground behind it is not executable.
+  const c = graphFor(game, obs.level, blocked, obs.levelScrollX + 8);
   if (!c) return undefined;
   const here = platformAt(c.platforms, obs.ai.levelX, obs.ai.y);
   if (!here) return undefined;

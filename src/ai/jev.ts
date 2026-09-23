@@ -2,6 +2,8 @@ import { TypeSafeClient, choice, noul, type JsonValue } from "@typesafe-ai/sdk";
 import { getConfig } from "../config.js";
 import { logger } from "../log.js";
 import { genreOf, type GameProfile } from "../games/registry.js";
+import type { Tactic } from "./tactics.js";
+import type { Forecast } from "./rollout.js";
 import type { Observation } from "./observe.js";
 import type { EdgeInfo, GapInfo } from "./policy.js";
 import { describeHop, type RouteInfo } from "./route.js";
@@ -40,6 +42,7 @@ export function actionsFor(game: GameProfile): Record<string, string> {
 
 export interface JevDecision {
   action: JevAction;
+  planId?: string;
   confidence: number;
   probabilities: Record<string, number>;
   partnerInDanger: number;
@@ -68,6 +71,8 @@ function getClient(): TypeSafeClient {
 
 /** Compact state for the model: relative positions, no raw bytes. */
 export interface JevExtra {
+  candidates?: Tactic[];
+  forecasts?: Forecast[];
   coachIntent?: string;
   recent?: string[];
   gap?: GapInfo;
@@ -106,19 +111,19 @@ export function dangersNear(game: GameProfile, obs: Observation): JevExtra["dang
 export function jevState(obs: Observation, extra: JevExtra = {}): { [k: string]: JsonValue } {
   const ai = obs.ai;
   const sorted = obs.enemies
-    .map((e) => ({ kind: e.category, dx: e.x - ai.x, dy: e.y - ai.y, moving_x: e.vx, moving_y: e.vy, hp: e.hp }))
+    .map((e) => ({ kind: e.category, dx: e.x - ai.x, dy: e.y - ai.y, moving_x: e.vxPerFrame ?? e.vx / 2.5, moving_y: e.vyPerFrame ?? e.vy / 2.5, hp: e.hp }))
     .sort((a, b) => Math.abs(a.dx) + Math.abs(a.dy) - (Math.abs(b.dx) + Math.abs(b.dy)));
   const enemies = sorted.filter((e) => e.kind !== "obstacle").slice(0, 7);
   // hazard = ground that gives way; it is listed so Jev never picks hold_fire on it
   return {
     game: obs.game,
     level_direction: obs.levelDirection,
-    buddy: { x: ai.x, y: ai.y, alive: ai.alive, lives: ai.lives, on_ground: ai.onGround, moving: ai.xVel, invincible: ai.invincible, weapon: ai.weapon },
+    buddy: { x: ai.x, y: ai.y, alive: ai.alive, lives: ai.lives, on_ground: ai.onGround, motion: ai.motion ?? "unknown", moving: ai.xVel, invincible: ai.invincible, weapon: ai.weapon },
     partner: obs.human.alive
       ? { alive: true, dx: obs.human.x - ai.x, dy: obs.human.y - ai.y, lives: obs.human.lives, moving: obs.human.xVel }
       : { alive: false, lives: obs.human.lives },
     pit_ahead: extra.gap
-      ? { starts_in_px: Math.round(extra.gap.dxStart), ends_in_px: Math.round(extra.gap.dxEnd), width_px: extra.gap.width, buddy_on_it: extra.gap.inside, partner_is: extra.gap.partner, note: "a bridge that explodes as it is crossed; a player who arrives after it is gone falls to death; it is too wide to jump" }
+      ? { starts_in_px: Math.round(extra.gap.dxStart), ends_in_px: Math.round(extra.gap.dxEnd), kind: extra.gap.kind, width_px: extra.gap.width, buddy_on_it: extra.gap.inside, partner_is: extra.gap.partner, note: extra.gap.kind === "hop" ? "a narrow gap: use the platform jump skill at its near edge" : extra.gap.kind === "pit" ? "an impassable drop at this height: find another platform route" : "a bridge that can collapse after a player crosses: coordinate crossing and verify the ground" }
       : "none within 200px",
     ledge_ahead: extra.edge
       ? { ends_in_px: Math.round(extra.edge.dist), ground_below: extra.edge.dropOk, next_platform: extra.edge.landing ? { dx: Math.round(extra.edge.landing.dx), dy: extra.edge.landing.dy, note: "reachable with a jump from the edge" } : "none known: walking off means falling" }
@@ -132,7 +137,7 @@ export function jevState(obs: Observation, extra: JevExtra = {}): { [k: string]:
     legend: {
       kind: "hostile = enemy that can be shot; projectile = enemy bullet/grenade, cannot be shot, must be dodged; item = weapon power-up worth collecting (a flying capsule must be shot first); hazard = bridge that explodes under the buddy, never stand still on or next to it",
       dx_dy: "pixels from the buddy; dx > 0 is ahead when level_direction is right; dy < 0 is above",
-      moving: "pixels per tick (about 1/12 s); a projectile with moving_x opposite in sign to dx is coming at the buddy",
+      moving: "relative pixels per emulator frame (60 fps); a projectile with moving_x opposite in sign to dx is coming at the buddy",
       known_dangers: "places (from_px..to_px ahead of the buddy, negative = behind) where the buddy died repeatedly in training, with the lesson",
     },
     screen: { width: obs.screen.width, height: obs.screen.height },
@@ -143,7 +148,7 @@ export function jevState(obs: Observation, extra: JevExtra = {}): { [k: string]:
 
 /** Tank genre: which intent should drive the buddy for the next second, plus two danger flags. */
 async function jevDecideTank(game: GameProfile, obs: Observation, extra: { coachIntent?: string; recent?: string[] }): Promise<JevDecision | undefined> {
-  const started = Date.now();
+  const started = performance.now();
   const state: { [k: string]: JsonValue } = {
     game: obs.game,
     ...(tankSummary(obs, game) as { [k: string]: JsonValue }),
@@ -189,7 +194,7 @@ async function jevDecideTank(game: GameProfile, obs: Observation, extra: { coach
       proneNow: 0,
       sprintNow: 0,
       baseInDanger: res.answers.base_in_danger.noul,
-      latencyMs: Date.now() - started,
+      latencyMs: Math.round(performance.now() - started),
       model: res.model,
       usage: { input: res.usage?.input_tokens ?? 0, output: res.usage?.output_tokens ?? 0 },
     };
@@ -202,50 +207,41 @@ async function jevDecideTank(game: GameProfile, obs: Observation, extra: { coach
 export async function jevDecide(game: GameProfile, obs: Observation, extra: JevExtra = {}): Promise<JevDecision | undefined> {
   if (!jevEnabled()) return undefined;
   if (genreOf(game) === "tank" && obs.tank) return jevDecideTank(game, obs, extra);
-  const started = Date.now();
-  const state = jevState(obs, extra);
+  const started = performance.now();
+  if (!extra.candidates || extra.candidates.length < 2) return undefined;
+  const state: { [k: string]: JsonValue } = {
+    stage: extra.stage ? { kind: extra.stage.kind, objective: extra.stage.objective } : { kind: obs.corridor ? "corridor" : obs.levelDirection },
+    buddy: { lives: obs.ai.lives, motion: obs.ai.motion ?? "unknown" },
+    partner: { alive: obs.human.alive, lives: obs.human.lives, position: !obs.human.alive ? "absent" : Math.abs(obs.human.x - obs.ai.x) < 40 ? "close" : obs.human.x > obs.ai.x ? "ahead" : "behind", movement: obs.human.xVel > 0 ? "right" : obs.human.xVel < 0 ? "left" : "waiting" },
+    forecasts: (extra.forecasts ?? []).map(r => ({ plan: r.id, buddy_death_predicted: r.died, partner_death_predicted: r.partnerDied, progress: r.progress > 8 ? "forward" : r.progress < -8 ? "backward" : "holding position", separation: r.separation > 100 ? "far apart" : "within cover range", note: "Short emulator prediction across two possible partner inputs; advisory, not a guarantee." })),
+    recent_events: extra.recent ?? [],
+  };
   try {
     const res = await getClient().systemOne({
       state,
       questions: {
-        action: choice(
+        plan: choice(
           {
-            question: "You control `buddy`, the AI teammate (player 2) in a co-op run-and-gun game. Which action should the buddy take for the next half second?",
+            question: "Which available tactical plan best helps this co-op team over the next one to two seconds?",
             rules: [
-              "Priority order: 1) stay alive, 2) keep the partner alive (cover them, shoot what threatens them), 3) progress. One touch from a hostile or a projectile kills; a dead buddy helps nobody.",
-              "Enemy shots are aimed at where the buddy stands: standing still under a shooter on another height (dy beyond ±28) gets the buddy killed; keep changing position (advance_fire or retreat), never hold_fire there.",
-              "A projectile flying level at the buddy's body or head (dy between -30 and 0, closing): prone_fire. A level shot at foot height (dy 1..24): jump_forward. A rising or diving shot (moving_y larger than moving_x): step sideways (advance_fire/retreat), never prone into it, never jump into it.",
-              "Never jump when a projectile is anywhere in the air nearby: a jump lasts a second and cannot be steered.",
-              "ledge_ahead: with no next_platform and no ground_below, walking off means death → stop (hold_fire) or go back; with a next_platform, jump_forward from the edge.",
-              "pit_ahead: cross a bridge only together with the partner (advance_fire while the partner is on it or about to step on it); never stop on it; if the partner is already beyond it and it is gone, hold_fire at the edge.",
-              "known_dangers: follow the lesson given for a zone the buddy is in or about to enter.",
-              "A hostile ahead within 100px at the same height that is running at the buddy: hold_fire until it is gone; do not walk into it. Hostiles near the partner come first when the buddy itself is safe.",
-              "The partner leads; never run more than ~60px ahead of a living partner. Prefer follow_partner when the partner is far ahead.",
-              "Items are good: a weapon item within reach and no hostile nearby → move toward it (advance_fire if ahead, retreat if behind).",
-              "stage.objective says what this level is about; route.next is the mapped way on (the high road on level 1: the water and low ledges dead-end). Follow the route unless something is shooting at the hop point right now.",
-              "big_targets (hp above 1) are walls, cannons, sensors, cores: they die to sustained fire from a spot where their shots miss. In a corridor stage, advance_fire/retreat are steps right/left along the floor line, hold_fire fires into the screen at the target above, aim_up_fire runs into an opened wall; line up (dx near 0) under a target and hold_fire.",
-              "plan is the reflex policy's own proposal with its reason. Agree with it (pick the same action) unless the state shows a clearly better move; never pick a jump or prone against a plan that is walking to a ledge.",
+              "Choose a goal, not an emergency button press. The local controller handles bullets, jumping, landing and immediate hazards.",
+              "Keep both players alive, then clear the stage. Cover an exposed partner; regroup when separated on safe ground; collect an item only when its detour is worthwhile.",
+              "In a corridor, keep firing at an aligned wall target rather than wandering. Different columns can let the two players cover different targets.",
+              "Use the candidate descriptions as the available plans. Do not infer unseen terrain or perform projectile arithmetic.",
             ],
           },
-          (extra.criteria ?? JEV_ACTIONS) as Record<JevAction, string>,
+          Object.fromEntries((extra.candidates ?? []).map(c => [c.id, c.description])),
         ),
-        partner_in_danger: noul("Is a hostile within 40px of the partner, or is the partner about to be overrun?"),
-        jump_now: noul("Is a LOW, level-flying projectile about to reach the buddy's feet (and no other projectile is in the air nearby), so that jumping right now is the way to survive?"),
-        prone_now: noul("Is a projectile at the buddy's body height about to hit it, so that lying prone right now avoids it?"),
-        sprint_now: noul("Should the buddy run forward at full speed right now, e.g. to cross the bridge with the partner or to keep up with a partner who is walking away?"),
       },
     });
-    const a = res.answers.action;
+    const a = res.answers.plan;
     return {
-      action: a.choice as JevAction,
+      action: "hold_fire", // Legacy field used only by the tank controller.
+      planId: a.choice,
       confidence: a.confidence,
       probabilities: a.probabilities as Record<string, number>,
-      partnerInDanger: res.answers.partner_in_danger.noul,
-      jumpNow: res.answers.jump_now.noul,
-      proneNow: res.answers.prone_now.noul,
-      sprintNow: res.answers.sprint_now.noul,
-      baseInDanger: 0,
-      latencyMs: Date.now() - started,
+      partnerInDanger: 0, jumpNow: 0, proneNow: 0, sprintNow: 0, baseInDanger: 0,
+      latencyMs: Math.round(performance.now() - started),
       model: res.model,
       usage: { input: res.usage?.input_tokens ?? 0, output: res.usage?.output_tokens ?? 0 },
     };

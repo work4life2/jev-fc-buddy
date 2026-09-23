@@ -4,7 +4,7 @@ An **AI teammate for classic NES co-op games**, played in the browser and sold a
 [Termix](https://termix.ai) agent marketplace (agent.family).
 
 - Agent harness: [pi](https://pi.dev) (`@earendil-works/pi-coding-agent` SDK) — runs the buyer chat through [OpenRouter](https://openrouter.ai) (any OpenAI-compatible relay works)
-- Decision model: [TypeSafe Jev](https://typesafe.ai) (System One) — typed, probability-backed action choices several times a second (`skills/typesafe-ai`). OpenRouter serves Jev on the same key through its System One endpoint (`/api/v1/systemone`, beta)
+- Decision model: [TypeSafe Jev](https://typesafe.ai) (System One) — typed, probability-backed tactical choices (`skills/typesafe-ai`). OpenRouter serves Jev on the same key through its System One endpoint (`/api/v1/systemone`, beta)
 - Marketplace: [termix-agent-skills](https://termix.ai/skills?v=1.8.0) v1.8.0 — hosting, orders, delivery, settlement (`skills/termix-agent-skills`, vendored unchanged)
 - Emulator: [jsnes](https://github.com/bfirsh/jsnes) in the player's browser; the server never streams video
 - Games: Contra (run-and-gun) and Battle City (top-down tanks). Games are plug-in profiles under `games/<id>/`; nothing outside that folder is title-specific. Each profile names a `genre` that selects the reflex policy: `run-and-gun` (follow / cover / jump / prone) or `tank` (lanes, shells, a base to protect)
@@ -17,13 +17,12 @@ buyer buys N USDC on Termix ──▶ hosting loop: accept (on-chain) ──▶ 
 player opens /?code=FC-…  ──▶ redeem ──▶ Insert coin (1 coin = one timed window, COIN_SESSION_MINUTES) ──▶ browser loads ROM
         │                                 leaving and coming back inside the window is free (now − insert time < minutes)
         │
-        ├─ browser: jsnes runs the game · P1 = keyboard / gamepad · P2 = the AI · reports RAM 12×/s over WebSocket
-        │
-        └─ server (one brain per session):
-             reflex policy (every tick, code)      → keeps the buddy moving: follow / cover / shoot / dodge
-             Jev (TypeSafe, ~4×/s, typed Choice)   → picks the action + "partner in danger?" / "jump now?" probabilities
-           every controller change and Jev verdict is pushed to the browser: the PAD view lights the buttons on an
-           on-screen NES controller and floats each move up like a rhythm game; the LOG view is the plain text stream
+        ├─ browser: jsnes runs at 60 fps; local skills/survival control runs at 24 Hz
+        │    └─ a Worker tests candidate plans under two possible partner inputs
+        └─ server: Jev chooses a tactical goal when meaningful alternatives exist
+             plans carry their source frame and lifecycle epoch; expired goals are rejected
+             local control rechecks targets and terrain before each action
+           PAD shows actual local buttons; LOG and the goal panel show selected goals
 ```
 
 The AI normally holds controller 2, so on the title screen it presses SELECT until the game is in
@@ -99,9 +98,8 @@ and every piece of ground it stood on. `learn` folds the reports into `games/<id
 The reflex policy reads that file on the next start and plans a **route** over the platform map
 (`src/ai/route.ts`: cheapest chain of hops — walk, drop, running jump, standing jump — from the ledge
 it stands on to the furthest known ground; dead ends route back to the last climb, or, with lives to
-spare, into the next pit so the respawn drop can be steered onto the high road). Jev gets the next hop,
-the nearby zones and the reflex policy's own proposal in its state. What the buddy learns alone is what
-it plays with next to a human.
+spare, into the next pit so the respawn drop can be steered onto the high road). The local controller executes these hops; Jev chooses between available tactical goals and
+receives short simulated outcomes when available. Terrain learning updates this map, not Jev's model weights.
 
 Mapping a level does not need the buddy to survive it: `--explore --invincible` runs a random-jump
 runner with the invincibility timer pinned (falls still kill, so pits and platforms fill in), and
@@ -116,7 +114,7 @@ node dist/index.js train run --episodes 3 --duo          # with a scripted partn
 node dist/index.js train run --episodes 1 --jev          # real-time pacing, Jev asked as in production
 node dist/index.js train show                            # what learned.json knows
 node dist/index.js train sweep --param dodgeDistance=48,64,80,96 --episodes 6 --apply
-node dist/index.js train eval --tag "<what changed>"     # 12 solo + 12 duo on fixed seeds → data/train/contra-ledger.json
+node dist/index.js train eval --tag "<what changed>"     # 12 solo + 12 duo on fixed seeds → data/train/<game-id>-ledger.json
 node dist/index.js train ledger                          # every candidate scored so far
 node dist/index.js train reflect --last 24               # deaths grouped by place with the last actions, as markdown
 ```
@@ -124,12 +122,30 @@ node dist/index.js train reflect --last 24               # deaths grouped by pla
 The change loop (borrowed from [JevHarness](https://github.com/TianyuCodings/JevHarness), whose LLM-authored
 harness + reflection + fixed evaluation is the same idea): `reflect` says where and how the buddy dies,
 you change one rule in `src/ai/policy.ts` or one criterion in `src/ai/criteria.ts`, `eval` scores the
-candidate on the same seeds as every previous one (score = deaths per 1000 px, duo counted twice; a
-candidate that reaches clearly further is accepted even when it dies more, because a buddy that gets to
-the wall and dies there beats one that never leaves the river) and
-marks it accepted only if it is not worse than the best so far. Jev's action descriptions are computed per
-state in `criteria.ts` (what each move does right now: walks into a shooter's reach, jumps into a bullet,
-steps off a ledge, leaves the partner), so code supplies the facts and Jev only judges.
+candidate on fixed seeds. The v2 ledger fingerprints the ROM, map, profile and frame budget;
+only compatible runs are compared. Acceptance requires no regression in reach, stage clears,
+AI deaths, partner deaths or stuck episodes against every accepted compatible entry. Older
+ledger entries remain available but are not silently treated as equivalent protocols.
+
+The tactical selector receives executable goals (route, regroup, cover a tracked target,
+collect a reachable item, align with a corridor target, or wait for coordinated crossing).
+A separate emulator predicts short-term outcomes under continued and released partner input.
+These predictions are advisory; unknown future inputs and emulator save-state limitations
+mean they cannot guarantee safety. The live emulator is never rewound by prediction.
+
+```bash
+npm test
+node dist/index.js train compare --episodes 12 --seed 7000 --frames 3600
+```
+
+`compare` runs 12 solo and 12 duo seed pairs, Jev off/on, using the same frame clock and
+controller. Jev runs are paced to real time for network responses. The frame budget includes
+menu loading; 3600 frames is a short diagnostic, not a complete-game claim. Reports include
+model identity, accepted/rejected choices, execution counts, latency samples and bounded
+choice traces. The comparison reports paired differences and descriptive uncertainty
+intervals. Longer runs and varied human inputs are needed before claiming general improvement.
+Production keeps the most recent 64 session traces under `data/decisions/`; browser execution
+counters distinguish server proposals from actual local control.
 
 The score is deaths per 1000 px of progress (lower is better) plus mean progress; `stuck@x` marks an
 episode that stopped making progress for 30 s (a dead end it refuses to jump into). Reports live in
@@ -233,7 +249,10 @@ src/ai/policy.ts       reflex policy (run-and-gun): intent → held buttons; wal
 src/ai/route.ts        route planning over the learned platform map (next hop, respawn targets)
 src/ai/tankPolicy.ts   reflex policy (tank): shells, lanes, path finding, base protection
 src/ai/jev.ts          TypeSafe Jev: typed Choice / Noul questions over the observation
-src/ai/player.ts       the brain: reflex ⟷ Jev, ops stream
+src/ai/player.ts       server tactical planner, lifecycle validation and ops stream
+src/ai/control.ts      shared local/headless skill executor
+src/ai/tactics.ts      executable goals and target validation
+src/ai/rollout.ts      isolated short-horizon emulator forecasts
 src/train/             self-play: harness.ts (headless episodes) · learn.ts (→ games/<id>/learned.json) · cli.ts (`train`)
 src/coins/store.ts     coin codes and play windows (data/coins.json) · src/runtimeConfig.ts runtime overrides (models, minutes per coin)
 src/termix/, src/hosting/, src/jobs/   marketplace: hosting loop, orders → codes → delivery, buyer chat

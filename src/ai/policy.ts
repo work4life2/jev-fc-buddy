@@ -58,7 +58,7 @@ export interface PolicyMemory {
   failedHops: Set<string>;
   level: number;
   /** A positional evasion (leave a shooter, sidestep a fan) is kept for a while so rules do not thrash. */
-  commit?: { intent: Intent; why: string; until: number };
+  commit?: { intent: Intent; why: string; until: number; plan?: boolean };
   /** Direction of the last "leave the shooter" move, to flip it when it produced no movement. */
   aimedDir?: 1 | -1;
   /** Scroll position last tick and since when it has not moved (a locked screen = boss / wall fight). */
@@ -236,8 +236,8 @@ export function fallSteer(game: GameProfile, obs: Observation, mem: PolicyMemory
     // Nearest first (a fall has little time to drift), route cost only breaks ties; the choice is locked for the whole fall.
     const reachable = options.filter((o) => o.dx <= Math.max(16, (o.p[2] - obs.ai.y) / 2.2)).sort((a, b) => a.dx + a.cost / 50 - (b.dx + b.cost / 50));
     // Wall fight: the floor, nothing else (the ledges by the wall are point-blank for its cannons).
-    const floor = bossActive(obs, mem, Date.now()) ? reachable.filter((o) => o.p[2] === Math.max(...reachable.map((r) => r.p[2])))[0] : undefined;
-    const locked = mem.fallTarget ? options.find((o) => o.p === mem.fallTarget) : undefined;
+    const floor = bossActive(obs, mem, obs.at) ? reachable.filter((o) => o.p[2] === Math.max(...reachable.map((r) => r.p[2])))[0] : undefined;
+    const locked = mem.fallTarget ? options.find((o) => o.p.every((v, i) => v === mem.fallTarget![i])) : undefined;
     const best = locked ?? floor ?? reachable[0] ?? options.sort((a, b) => a.dx - b.dx)[0];
     if (best) mem.fallTarget = best.p;
     if (best && Math.abs(best.x - me) > 4) return { dir: best.x > me ? "RIGHT" : "LEFT", why: `${obs.ai.alive ? "falling" : "respawning"} → drift to the ledge at y ${best.p[2]} (${best.x > me ? "right" : "left"})` };
@@ -362,10 +362,10 @@ function routeIntentInner(game: GameProfile, obs: Observation, mem: PolicyMemory
   if (d > 8) return force ? { intent: "advance_fire", why: what } : undefined;
   if (d < -8) {
     if (ai.x < 28) return { intent: "hold_fire", why: `${what} (screen edge, wait for the scroll)` };
-    mem.commit = { intent: "retreat", why: what, until: now + 250 };
+    mem.commit = { intent: "retreat", why: what, plan: true, until: now + 250 };
     return { intent: "retreat", why: what };
   }
-  if (r.next.kind === "drop") return { intent: "advance_fire", why: what };
+  if (r.next.kind === "drop") return { intent: r.next.dir > 0 ? "advance_fire" : "retreat", why: what };
   if (!ai.onGround) return undefined;
   const kind: Intent = r.next.kind === "jump_up" ? "jump_up" : "jump_forward";
   if (now - mem.lastJumpAt > 500 && (jumpIsSafe(rel) || d <= 2)) return { intent: kind, why: what };
@@ -394,7 +394,7 @@ export function corridorIntent(game: GameProfile, obs: Observation, mem: PolicyM
     .filter((t) => t.e.dy < 0 && t.e.dy > -90 && Math.abs(t.xAt) < 22 && t.ticks < 14)
     .sort((a, b) => a.ticks - b.ticks)[0];
   if (incoming) {
-    const mode = process.env.CORRIDOR_DODGE ?? "side";
+    const mode = "side" as string;
     if (mode === "prone") return { intent: "prone_fire", why: `corridor: shot coming down at us (dx ${incoming.e.dx}, dy ${incoming.e.dy}) → duck` };
     if (mode === "jump" && ai.onGround && now - mem.lastJumpAt > 700) return { intent: "jump_forward", why: `corridor: shot coming down at us (dx ${incoming.e.dx}, dy ${incoming.e.dy}) → hop` };
     // Sidestep to whichever side has fewer shots landing (a spread of three is common): score x±28.
@@ -406,7 +406,7 @@ export function corridorIntent(game: GameProfile, obs: Observation, mem: PolicyM
     mem.commit = { intent: dir > 0 ? "advance_fire" : "retreat", why: `corridor: shot coming down at us (dx ${incoming.e.dx}, dy ${incoming.e.dy}, lands ${Math.round(incoming.xAt)}px) → sidestep ${dir > 0 ? "right" : "left"}`, until: now + 300 };
     return { intent: mem.commit.intent, why: mem.commit.why };
   }
-  if (mem.commit && now < mem.commit.until) return { intent: mem.commit.intent, why: mem.commit.why };
+  if (mem.commit && now < mem.commit.until) return { intent: mem.commit.intent, why: mem.commit.why, plan: mem.commit.plan };
   mem.commit = undefined;
   // A soldier about to reach the floor line next to us: step away from it while firing.
   const runner = rel.find((e) => e.category === "hostile" && e.hp <= 1 && Math.abs(e.dx) < 28 && e.dy > -40 && e.dy < 12);
@@ -428,7 +428,7 @@ export function corridorIntent(game: GameProfile, obs: Observation, mem: PolicyM
 /** Locked screen with something big to kill on it: the wall fight is on. */
 export function bossActive(obs: Observation, mem: PolicyMemory, now: number): boolean {
   if (!mem.scrollStillSince || now - mem.scrollStillSince < 1500) return false;
-  return obs.enemies.some((e) => (e.category === "hostile" || e.category === "obstacle") && e.hp >= 8 && Math.abs(e.x - obs.ai.x) < 240);
+  return obs.enemies.some((e) => e.category === "obstacle" && e.hp >= 8 && Math.abs(e.x - obs.ai.x) < 240);
 }
 
 /**
@@ -508,7 +508,7 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
     const e = edgeAhead(game, obs, (sign * dir) as 1 | -1);
     const g = gapAhead(game, obs, mem, (sign * dir) as 1 | -1, 40);
     const blocked = (e && !e.dropOk && e.dist < 14) || (g && g.kind !== "bridge" && g.dxStart < 14);
-    if (!blocked) return { intent: mem.commit.intent, why: mem.commit.why };
+    if (!blocked) return { intent: mem.commit.intent, why: mem.commit.why, plan: mem.commit.plan };
   }
   mem.commit = undefined;
   // 1. Projectiles. Enemy shots are aimed at where the buddy stands, so the dodge depends on the
@@ -617,7 +617,7 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
       if (dir > 0 && edge && !edge.dropOk && !edge.landing && edge.dist < 24) dir = canRetreat(game, obs, mem, sign) ? -1 : 0; // never off the ledge
       if (dir !== 0) {
         mem.aimedDir = dir;
-        mem.commit = { intent: dir === sign ? "advance_fire" : "retreat", why: `shooter ${aimed.dy > 0 ? "below" : "above"} (dx ${aimed.dx}, dy ${aimed.dy}) aims at us → keep moving ${dir > 0 ? "on" : "back"}`, until: now + 450 };
+        mem.commit = { intent: dir === sign ? "advance_fire" : "retreat", why: `shooter ${aimed.dy > 0 ? "below" : "above"} (dx ${aimed.dx}, dy ${aimed.dy}) aims at us → keep moving ${dir > 0 ? "on" : "back"}`, plan: true, until: now + 450 };
         return { intent: mem.commit.intent, why: mem.commit.why, plan: true };
       }
     }
@@ -678,7 +678,7 @@ export function survivalIntent(game: GameProfile, obs: Observation, mem: PolicyM
   };
   const heavy = rel.find((e) => e.category === "hostile" && keep(e) > 0 && Math.abs(e.dx) < keep(e) && e.dy > -28 && e.dy < 24);
   if (heavy) {
-    mem.commit = { intent: heavy.dx >= 0 ? "retreat" : "advance_fire", why: `stationary shooter #${heavy.type.toString(16)} at dx ${heavy.dx}, dy ${heavy.dy} → keep ${keep(heavy)}px`, until: now + 500 };
+    mem.commit = { intent: heavy.dx >= 0 ? "retreat" : "advance_fire", why: `stationary shooter #${heavy.type.toString(16)} at dx ${heavy.dx}, dy ${heavy.dy} → keep ${keep(heavy)}px`, plan: true, until: now + 500 };
     return { intent: mem.commit.intent, why: mem.commit.why, plan: true };
   }
   // 3. Sniper / turret above us: straight up when overhead, diagonal when it is ahead and above.
@@ -804,11 +804,8 @@ export function actionFor(game: GameProfile, obs: Observation, intent: Intent, m
    * Shoot in a direction without walking into it: tap the direction just long enough to turn the
    * sprite (Contra keeps facing the last direction pressed), then fire standing still.
    */
-  const partnerMovingForward = obs.human.alive && obs.human.xVel === sign;
   const face = (dir: 1 | -1, reason: string, tagBase: string): Action => {
-    // A partner who keeps walking forward drags the screen (and explodes bridges behind them):
-    // never stand still then, walk along instead.
-    if (partnerMovingForward && dir === sign) return { hold: [...walk(fwd), ...holdFire], turbo, tag: `${fwd}+${fire}`, reason: `${reason}, partner moving → keep up` };
+    // Facing must not silently turn a stop (including a cliff stop) into following.
     const key: Button = dir > 0 ? "RIGHT" : "LEFT";
     if (mem.facing !== dir && !mem.turnUntil) mem.turnUntil = now + 130;
     if (mem.turnUntil && now < mem.turnUntil) return { hold: [key, ...holdFire], turbo, tag: `${tagBase}:turn`, reason: `${reason} (turning)` };
@@ -819,13 +816,7 @@ export function actionFor(game: GameProfile, obs: Observation, intent: Intent, m
 
   switch (intent) {
     case "advance_fire": {
-      const onHazard = relative(obs, sign).some((e) => e.category === "hazard" && Math.abs(e.dx) < 40 && e.dy > -8 && e.dy < 48);
-      if (obs.human.alive && !ai.invincible && !onHazard) {
-        const dxP = (obs.human.x - ai.x) * sign;
-        // Far ahead of the partner: standing still to wait is what gets the buddy shot; walk back to them instead.
-        if (dxP < -game.reflex.followDistance * 1.5) return { hold: [...walk(back), ...holdFire], turbo, tag: `${back}+${fire}`, reason: "rejoining partner" };
-        if (dxP < -game.reflex.followDistance) return face(sign, "waiting for partner", "cover");
-      }
+      if (obs.corridor) return { hold: [...walk("RIGHT"), ...holdFire], turbo, tag: `RIGHT+${fire}`, reason: "align right" };
       return { hold: [...walk(fwd), ...holdFire], turbo, tag: `${fwd}+${fire}`, reason: "advance" };
     }
     case "follow_partner": {

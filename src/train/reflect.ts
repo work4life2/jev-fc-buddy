@@ -5,6 +5,10 @@ import type { GameProfile } from "../games/registry.js";
 import type { DeathRecord, EpisodeReport } from "./harness.js";
 import { loadLearned, reportsDir } from "./learn.js";
 import { summarize } from "./cli.js";
+import { createHash } from "node:crypto";
+import { getConfig } from "../config.js";
+import { romPath } from "../games/registry.js";
+import { regressions, teamMetrics, type TeamMetrics } from "./metrics.js";
 
 /**
  * The reflection side of the loop (after JevHarness): fixed-seed evaluations go into a ledger so
@@ -14,6 +18,10 @@ import { summarize } from "./cli.js";
  */
 
 export interface LedgerEntry {
+  protocol?: string;
+  jev?: boolean;
+  model?: string;
+  team?: { solo: TeamMetrics; duo: TeamMetrics };
   at: string;
   sha: string;
   tag: string;
@@ -24,6 +32,8 @@ export interface LedgerEntry {
   /** Lower is better: deaths per 1000px, solo and duo averaged, duo weighted double (the product is co-op). */
   score: number;
   accepted?: boolean;
+  /** Why the gate said no: one line per regressed dimension against each accepted compatible entry. */
+  rejectedBy?: string[];
 }
 
 export function ledgerPath(game: GameProfile): string {
@@ -47,8 +57,16 @@ export function recordEval(game: GameProfile, tag: string, seed: number, episode
   const s = summarize(solo);
   const d = summarize(duo);
   const ledger = loadLedger(game);
-  const best = ledger.filter((e) => e.accepted).sort((a, b) => a.score - b.score)[0];
+  const reports = [...solo, ...duo];
+  const hash = (x: string | Buffer) => createHash("sha256").update(x).digest("hex");
+  const protocol = hash(JSON.stringify({ version: 2, seed, episodes, budgets: reports.map(r => r.maxFrames), rom: hash(fs.readFileSync(romPath(game))), profile: game, modes: reports.map(r => r.mode) }));
+  const comparable = ledger.filter(e => e.protocol === protocol && e.jev === !!reports[0]?.jev && e.team);
+  const best = comparable.filter(e => e.accepted).sort((a, b) => b.team!.solo.level + 2 * b.team!.duo.level - a.team!.solo.level - 2 * a.team!.duo.level || b.team!.solo.progress + 2 * b.team!.duo.progress - a.team!.solo.progress - 2 * a.team!.duo.progress || a.score - b.score)[0];
   const entry: LedgerEntry = {
+    protocol,
+    jev: !!reports[0]?.jev,
+    model: reports.find(r => r.decisions?.model)?.decisions?.model ?? (reports[0]?.jev ? getConfig().typesafe.model : "none"),
+    team: { solo: teamMetrics(solo), duo: teamMetrics(duo) },
     at: new Date().toISOString(),
     sha: gitSha(),
     tag,
@@ -58,10 +76,13 @@ export function recordEval(game: GameProfile, tag: string, seed: number, episode
     duo: { deaths: d.deaths, distance: d.distance, perKpx: d.perKpx, progress: d.progress },
     score: (s.perKpx + 2 * d.perKpx) / 3,
   };
-  // Accepted when it is not deadlier at the same reach, or when it reaches clearly further (a buddy that
-  // gets to the wall and dies there beats one that never leaves the river): progress first, deaths second.
-  const reach = (e: { solo: { progress: number }; duo: { progress: number } }) => e.solo.progress + 2 * e.duo.progress;
-  entry.accepted = !best || reach(entry) > reach(best) + 300 || (reach(entry) >= reach(best) - 150 && entry.score <= best.score);
+  // Require no team regression against every accepted, compatible benchmark; record what failed.
+  const rejectedBy = comparable.filter(e => e.accepted).flatMap(e => [
+    ...regressions(entry.team!.solo, e.team!.solo).map(r => `solo ${r} (vs ${e.tag})`),
+    ...regressions(entry.team!.duo, e.team!.duo).map(r => `duo ${r} (vs ${e.tag})`),
+  ]);
+  entry.accepted = rejectedBy.length === 0;
+  if (rejectedBy.length) entry.rejectedBy = rejectedBy;
   ledger.push(entry);
   fs.writeFileSync(ledgerPath(game), JSON.stringify(ledger, null, 1) + "\n");
   return { entry, best };

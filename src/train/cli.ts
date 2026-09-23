@@ -5,6 +5,7 @@ import { describe, learn, loadLearned, loadReports, saveLearned, saveReport } fr
 import { loadLedger, recordEval, reflectReport } from "./reflect.js";
 import fs from "node:fs";
 import path from "node:path";
+import { deathsByReach, pairedDifference, teamMetrics } from "./metrics.js";
 
 /**
  * `jev-fc-buddy train <run|learn|sweep|show> [--game id] [--episodes N] [--seed N] [--duo] [--jev] [--frames N] [--level N] [-v]`
@@ -80,6 +81,30 @@ export async function trainCli(rest: string[]): Promise<void> {
   const seed0 = Number(opt(args, "--seed") ?? Date.now() % 1000);
   const seeds = Array.from({ length: episodes }, (_, i) => seed0 + i);
   switch (sub) {
+    case "compare": {
+      const n = Number(opt(args, "--episodes") ?? 12);
+      const start = Number(opt(args, "--seed") ?? 7000);
+      const evalSeeds = Array.from({ length: n }, (_, i) => start + i);
+      if (!getConfig().typesafe.apiKey) throw new Error("Jev comparison requires a configured key; refusing to silently run two reflex baselines");
+      const off: EpisodeReport[] = [], on: EpisodeReport[] = [];
+      const baseArgs = args.filter(a => a !== "--jev" && a !== "--duo");
+      for (const duo of [false, true]) {
+        const modeArgs = duo ? [...baseArgs, "--duo"] : baseArgs;
+        for (const seed of evalSeeds) {
+          process.stdout.write(`pair ${duo ? "duo" : "solo"} seed ${seed}: reflex\n`);
+          const [baseline] = await play(game, modeArgs, [seed]);
+          saveReport(game, baseline!); off.push(baseline!);
+          process.stdout.write(`pair ${duo ? "duo" : "solo"} seed ${seed}: Jev\n`);
+          const [model] = await play(game, [...modeArgs, "--jev"], [seed]);
+          saveReport(game, model!); on.push(model!);
+        }
+      }
+      const result = { at: new Date().toISOString(), seed: start, episodesPerMode: n, maxFrames: Number(opt(args, "--frames") ?? 14400), off: teamMetrics(off), on: teamMetrics(on), difference: pairedDifference(off, on), decisions: on.map(r => ({ seed: r.seed, mode: r.mode, ...r.decisions })) };
+      const file = path.join(getConfigDataDir(), "train", `${game.id}-comparison-${Date.now()}.json`);
+      fs.writeFileSync(file, JSON.stringify(result, null, 2) + "\n");
+      process.stdout.write(JSON.stringify(result, null, 2) + `\n(saved to ${file})\n`);
+      return;
+    }
     case "run": {
       const rounds = Number(opt(args, "--rounds") ?? 1);
       let g = game;
@@ -120,10 +145,22 @@ export async function trainCli(rest: string[]): Promise<void> {
       const { entry, best } = recordEval(game, tag, seed, n, solo, duo);
       const fmt = (e: { deaths: number; perKpx: number; progress: number }) => `${e.deaths} deaths, ${e.perKpx.toFixed(2)}/1000px, progress ${e.progress}`;
       process.stdout.write(`solo: ${fmt(entry.solo)}\nduo:  ${fmt(entry.duo)}\nscore ${entry.score.toFixed(3)} (${entry.sha})${best ? ` vs best ${best.score.toFixed(3)} (${best.tag}, ${best.sha})` : ""} → ${entry.accepted ? "ACCEPTED" : "worse, keep the previous policy"}\n`);
+      if (best?.team) {
+        // Where the deaths are relative to the best accepted run's reach: beyond it means ground the reference never played.
+        const reach = (label: string, reports: EpisodeReport[], ref: { level: number; progress: number }) => {
+          const split = deathsByReach(reports, ref);
+          return `${label}: ${split.within} deaths within the reference reach (stage ${ref.level}, x≤${Math.round(ref.progress)}), ${split.beyond} beyond it`;
+        };
+        process.stdout.write(`${reach("solo", solo, best.team.solo)}\n${reach("duo", duo, best.team.duo)}\n`);
+      }
+      for (const why of entry.rejectedBy ?? []) process.stdout.write(`  regression: ${why}\n`);
       return;
     }
     case "ledger": {
-      for (const e of loadLedger(game)) process.stdout.write(`${e.at.slice(0, 16)} ${e.sha.padEnd(9)} ${e.tag.padEnd(28)} solo ${String(e.solo.deaths).padStart(3)} (${e.solo.perKpx.toFixed(2)}) reach ${String(e.solo.progress).padStart(4)}  duo ${String(e.duo.deaths).padStart(3)} (${e.duo.perKpx.toFixed(2)}) reach ${String(e.duo.progress).padStart(4)}  score ${e.score.toFixed(3)} ${e.accepted ? "✓" : "✗"}\n`);
+      for (const e of loadLedger(game)) {
+        process.stdout.write(`${e.at.slice(0, 16)} ${e.sha.padEnd(9)} ${e.tag.padEnd(28)} solo ${String(e.solo.deaths).padStart(3)} (${e.solo.perKpx.toFixed(2)}) reach ${String(e.solo.progress).padStart(4)}  duo ${String(e.duo.deaths).padStart(3)} (${e.duo.perKpx.toFixed(2)}) reach ${String(e.duo.progress).padStart(4)}  score ${e.score.toFixed(3)} ${e.accepted ? "✓" : "✗"}\n`);
+        for (const why of e.rejectedBy ?? []) process.stdout.write(`${" ".repeat(17)}✗ ${why}\n`);
+      }
       return;
     }
     case "reflect": {

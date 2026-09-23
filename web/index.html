@@ -85,7 +85,7 @@
         </div>
       </div>
     </div>
-    <div class="legend"><span class="tag jev">JEV</span> split-second decision · <span class="tag reflex">REFLEX</span> built-in policy · <span class="tag macro">MACRO</span> menu inputs</div>
+    <div class="legend"><span class="tag jev">JEV</span> tactical goals · <span class="tag reflex">REFLEX</span> local movement and survival · <span class="tag macro">MACRO</span> menu inputs</div>
   </section>
 
   <aside class="side">
@@ -97,6 +97,7 @@
       </div>
     </div>
 
+    <div id="goalStatus" class="goalStatus" role="status">Following the route with local survival control.</div>
     <div id="padView" class="padView">
       <div id="lane" class="lane" aria-live="off"></div>
       <div class="controller" id="controller" aria-label="AI controller">
@@ -135,6 +136,6 @@
   </div>
 </div>
 <script src="/vendor/jsnes.min.js"></script>
-<script src="/app.js"></script>
+<script type="module" src="/app.js"></script>
 </body>
 </html>

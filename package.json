@@ -21,7 +21,8 @@
     "model": "node dist/index.js model",
     "pi": "node dist/index.js pi",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "build:web": "node scripts/copy-vendor.mjs && node scripts/write-web-config.mjs"
+    "build:web": "npm run build && node scripts/write-web-config.mjs",
+    "test": "npm run build && node --test --experimental-test-isolation=none tests/*.test.mjs"
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.85.1",

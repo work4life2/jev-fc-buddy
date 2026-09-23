@@ -53,7 +53,7 @@ export interface Config {
   ai: {
     /** How often the browser reports game state (Hz). */
     observeHz: number;
-    /** Max Jev requests per second per session (in-flight is capped at 1 anyway). */
+    /** Maximum request rate; the tactical planner also enforces one request in flight. */
     jevHz: number;
   };
   coins: {

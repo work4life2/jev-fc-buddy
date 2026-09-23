@@ -134,7 +134,7 @@ function sessionPublic(s: PlaySession) {
     sessionId: s.id,
     windowId: s.windowId,
     token: s.token,
-    game: publicGame(s.game),
+    game: { ...publicGame(s.game), controlProfile: { ...s.game, rom: "", romSha256: undefined } },
     startedAt: new Date(s.startedAt).toISOString(),
     expiresAt: new Date(s.expiresAt).toISOString(),
     remaining: code ? remaining(code) : 0,
@@ -346,7 +346,7 @@ function attachWs(s: PlaySession, ws: WebSocket): void {
   stopBrain(s);
   s.brain = new BuddyBrain({ game: s.game, send });
   ws.on("message", (raw) => {
-    let msg: { type?: string; ram?: string; lang?: string };
+    let msg: { type?: string; ram?: string; lang?: string; frame?: number; epoch?: number; forecast?: unknown; execution?: unknown };
     try {
       msg = JSON.parse(raw.toString()) as typeof msg;
     } catch {
@@ -355,7 +355,9 @@ function attachWs(s: PlaySession, ws: WebSocket): void {
     if (s.ended) return;
     switch (msg.type) {
       case "obs":
-        if (msg.ram) s.brain?.onObservation(Buffer.from(msg.ram, "base64"));
+        if (msg.forecast) s.brain?.onForecast(msg.forecast);
+        if (msg.execution) s.brain?.onExecutionReport(msg.execution);
+        if (typeof msg.ram === "string") s.brain?.onObservation(Buffer.from(msg.ram, "base64"), Number.isSafeInteger(msg.frame) && msg.frame! >= 0 ? msg.frame : undefined, Number.isSafeInteger(msg.epoch) && msg.epoch! >= 0 ? msg.epoch : undefined);
         break;
       case "hello":
         if (msg.lang) s.lang = msg.lang;

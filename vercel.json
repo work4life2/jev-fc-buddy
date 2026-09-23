@@ -1,7 +1,7 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "framework": null,
-  "installCommand": "npm install --omit=dev --ignore-scripts --no-audit --no-fund",
+  "installCommand": "npm ci --include=dev --ignore-scripts --no-audit --no-fund",
   "buildCommand": "JEV_API_BASE=\"${JEV_API_BASE:-https://fc.172.104.55.67.sslip.io}\" npm run build:web",
   "outputDirectory": "web",
   "cleanUrls": false,

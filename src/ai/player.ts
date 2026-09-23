@@ -1,11 +1,13 @@
 import { getConfig } from "../config.js";
 import { logger } from "../log.js";
 import { genreOf, type GameProfile } from "../games/registry.js";
-import { dangersNear, jevDecide, jevEnabled, stageBrief, type JevAction, type JevDecision } from "./jev.js";
-import { describeHop, hopKey, routeAhead } from "./route.js";
-import { actionCriteria } from "./criteria.js";
+import { jevDecide, jevEnabled, stageBrief, type JevDecision } from "./jev.js";
+import { GameController, PLAN_MAX_AGE_MS } from "./control.js";
+import type { PlanSelection } from "./tactics.js";
+import type { Forecast } from "./rollout.js";
+import { saveDecisionTrace } from "./trace.js";
 import { observe, type Observation } from "./observe.js";
-import { actionFor, edgeAhead, fallSteer, gapAhead, heuristicIntent, IDLE, newMemory, respawnSteer, sameAction, survivalIntent, type Action, type Button, type Intent, type PolicyMemory } from "./policy.js";
+import { IDLE, sameAction, type Action, type Button } from "./policy.js";
 import { newTankMemory, TANK_INTENTS, tankDecide, type TankIntent, type TankMemory } from "./tankPolicy.js";
 
 const log = logger("buddy");
@@ -16,7 +18,8 @@ export type OpSource = "reflex" | "jev" | "macro" | "system";
 export type BuddyMessage =
   | { type: "act"; controller: number; hold: Button[]; turbo: Button[]; tag: string; src: string }
   | { type: "op"; src: OpSource; text: string; detail?: Record<string, unknown>; at: number }
-  | { type: "status"; jev: boolean; phase: string };
+  | { type: "status"; jev: boolean; phase: string }
+  | { type: "plan"; selection: PlanSelection };
 
 export interface BrainOptions {
   game: GameProfile;
@@ -25,6 +28,7 @@ export interface BrainOptions {
   jev?: boolean;
   /** Do not write deaths to the log file (self-play). */
   quiet?: boolean;
+  decide?: typeof jevDecide;
 }
 
 /**
@@ -35,7 +39,14 @@ export interface BrainOptions {
 export class BuddyBrain {
   private readonly game: GameProfile;
   private readonly send: (m: BuddyMessage) => void;
-  private mem: PolicyMemory = newMemory();
+  private readonly control: GameController;
+  private readonly decide: typeof jevDecide;
+  private observationFrame = 0;
+  private clientEpoch?: number;
+  private forecast?: { frame: number; level: number; lives: number; rows: Forecast[] };
+  private modelStats = { responses: 0, failed: 0, rejected: 0, accepted: 0, jevTicks: 0, reflexTicks: 0, interruptions: 0, latencies: [] as number[], model: "" };
+  private decisionTrace: Record<string, unknown>[] = [];
+  private clientExecution?: { jevTicks: number; reflexTicks: number; rejectedPlans: number };
   private tankMem: TankMemory = newTankMemory();
   private readonly tank: boolean;
   private last: Action = IDLE;
@@ -56,9 +67,11 @@ export class BuddyBrain {
 
   constructor(o: BrainOptions) {
     this.game = o.game;
+    this.control = new GameController(o.game);
+    this.decide = o.decide ?? jevDecide;
     this.tank = genreOf(o.game) === "tank";
     this.send = o.send;
-    this.useJev = (o.jev ?? true) && jevEnabled();
+    this.useJev = (o.jev ?? true) && (!!o.decide || jevEnabled());
     this.quiet = o.quiet ?? false;
     this.send({ type: "status", jev: this.useJev, phase: "boot" });
     this.op("system", this.useJev ? `Jev online (${getConfig().typesafe.model}${getConfig().typesafe.viaRelay ? " via relay" : ""})` : "Jev offline (no relay/TypeSafe key): reflex policy only");
@@ -74,11 +87,13 @@ export class BuddyBrain {
   }
 
   /** Called for every state report from the browser. */
-  onObservation(bytes: Uint8Array) {
+  onObservation(bytes: Uint8Array, frame?: number, epoch?: number) {
     if (this.stopped) return;
     const prev = this.lastObs;
     const obs = observe(this.game, bytes, prev);
+    this.clientEpoch = epoch;
     this.lastObs = obs;
+    this.observationFrame = frame ?? this.observationFrame + (prev ? Math.max(1, (obs.frame - prev.frame + 256) % 256) : 0);
     this.stats.ticks++;
     const now = obs.at;
     // Time actually spent connected: gaps longer than 5 s (tab closed, network) are not play time.
@@ -92,6 +107,7 @@ export class BuddyBrain {
       if (obs.phase === "playing") this.op("system", `level ${obs.level + 1} · go!`);
       if (obs.phase === "gameover") this.op("system", "game over");
     }
+    if (prev && (prev.phase !== obs.phase || prev.level !== obs.level || prev.ai.alive !== obs.ai.alive || prev.ai.lives !== obs.ai.lives)) this.jev = undefined;
     if (prev && obs.phase === "playing") {
       if (prev.ai.alive && !obs.ai.alive) {
         this.stats.aiDeaths++;
@@ -121,6 +137,7 @@ export class BuddyBrain {
       this.op("system", "the base is gone — game over");
     }
 
+    if (!this.tank && obs.phase !== "playing") this.control.step(obs, now);
     switch (obs.phase) {
       case "title":
         this.titleMacro(obs, now);
@@ -135,22 +152,6 @@ export class BuddyBrain {
       case "playing":
         if (this.tank) {
           this.playTank(obs, now);
-          return;
-        }
-        if (!obs.ai.alive) {
-          if (this.mem.wasAlive) {
-            this.mem.fallTarget = undefined; // a new fall (the respawn drop) picks its own ledge
-            // Died within 2 s of a route jump, at the bottom of the screen: that hop does not work, route around it.
-            if (this.mem.lastHop && now - this.mem.lastHop.at < 2000 && obs.ai.y >= 200) {
-              this.mem.failedHops.add(hopKey(this.mem.lastHop.hop));
-              this.op("system", `route: the jump ${describeHop({ here: this.mem.lastHop.hop.from, next: this.mem.lastHop.hop, hops: 0, endX: 0, cost: 0 }, this.mem.lastHop.hop.atX)} ended in a fall → avoided from now on`);
-            }
-            this.mem.lastHop = undefined;
-          }
-          this.mem.wasAlive = false;
-          const steer = respawnSteer(this.game, obs, this.mem);
-          if (steer) this.apply({ hold: steer.dir ? [steer.dir] : [], turbo: [], tag: steer.dir ?? "still", reason: steer.why }, "reflex");
-          else this.apply(IDLE, "reflex");
           return;
         }
         this.play(obs, now);
@@ -168,9 +169,9 @@ export class BuddyBrain {
       this.jevLastAt = now;
       this.stats.jevCalls++;
       const askedAt = now;
-      void jevDecide(this.game, obs, { recent: this.recent.slice(-5) })
+      void this.decide(this.game, obs, { recent: this.recent.slice(-5) })
         .then((d) => {
-          if (!d || this.stopped) return;
+          if (!d || this.stopped || !this.lastObs?.ai.alive || this.lastObs.level !== obs.level || this.lastObs.ai.lives !== obs.ai.lives || Date.now() - askedAt >= 1500) return;
           this.stats.jevIn += d.usage.input;
           this.stats.jevOut += d.usage.output;
           if (this.jev && this.jev.askedAt > askedAt) return;
@@ -190,7 +191,7 @@ export class BuddyBrain {
     // Intent: a fresh, reasonably confident Jev answer; else the policy's own judgement.
     let intent: TankIntent | "auto" = "auto";
     let src: "jev" | "reflex" = "reflex";
-    const fresh = this.jev && now - this.jev.at < 1500 ? this.jev.decision : undefined;
+    const fresh = this.jev && now - this.jev.askedAt < 1500 ? this.jev.decision : undefined;
     if (fresh && fresh.baseInDanger > 0.7) {
       intent = "defend_base";
       src = "jev";
@@ -229,133 +230,71 @@ export class BuddyBrain {
   }
 
   private play(obs: Observation, now: number) {
-    const { ai } = getConfig();
-    // 1. Ask Jev jevHz times a second with up to two requests in flight (answers ~300–700 ms apart).
-    const sign: 1 | -1 = 1;
-    const gap = gapAhead(this.game, obs, this.mem, sign);
-    const urgent = survivalIntent(this.game, obs, this.mem, now);
-    if (this.useJev && this.jevInflight < 2 && now - this.jevLastAt >= 1000 / ai.jevHz) {
-      this.jevInflight++;
-      this.jevLastAt = now;
-      this.stats.jevCalls++;
-      const askedAt = now;
-      const planNow = urgent ?? heuristicIntent(this.game, obs, this.mem, now);
-      void jevDecide(this.game, obs, { recent: this.recent.slice(-5), gap, edge: edgeAhead(this.game, obs, sign), dangers: dangersNear(this.game, obs), criteria: actionCriteria(this.game, obs, this.mem), plan: { intent: planNow.intent, why: planNow.why, reflex: urgent !== undefined && !urgent.plan }, route: routeAhead(this.game, obs), stage: stageBrief(this.game, obs) })
-        .then((d) => {
-          if (!d || this.stopped) return;
-          this.stats.jevIn += d.usage.input;
-          this.stats.jevOut += d.usage.output;
-          if (this.jev && this.jev.askedAt > askedAt) return; // an answer to a newer state already arrived
-          const changed = !this.jev || this.jev.decision.action !== d.action;
-          this.jev = { decision: d, at: Date.now(), askedAt };
-          if (changed) {
-            const top = Object.entries(d.probabilities)
-              .sort((a, b) => b[1] - a[1])
-              .slice(0, 3)
-              .map(([k, v]) => `${k} ${(v * 100).toFixed(0)}%`)
-              .join(" · ");
-            this.op("jev", `${d.action} (conf ${(d.confidence * 100).toFixed(0)}%, ${d.latencyMs}ms)`, { top, partnerInDanger: d.partnerInDanger, jumpNow: d.jumpNow });
-          }
-        })
-        .finally(() => this.jevInflight--);
-    }
-
-    // 2. Pick the intent. Survival reflexes always win (a model round trip is too slow for a bullet);
-    //    then a fresh, confident Jev answer; then the built-in heuristics.
-    let intent: Intent;
-    let src: "jev" | "reflex" = "reflex";
-    let why = "";
-    const fresh = this.jev && now - this.jev.at < 1200 ? this.jev.decision : undefined;
-    // Falling without having jumped (respawn drop, walked off a ledge): steer to ground with a way on.
-    // The game's jump flag stays clear while falling, so falling = y increasing.
-    this.mem.fallTicks = this.mem.lastY >= 0 && obs.ai.y - this.mem.lastY >= 4 ? this.mem.fallTicks + 1 : 0;
-    this.mem.lastY = obs.ai.y;
-    if (!this.mem.wasAlive) this.mem.respawnUntil = now + 1300; // back to life: the respawn drop from the top of the screen
-    this.mem.wasAlive = true;
-    const falling = this.mem.fallTicks >= 2 || now < this.mem.respawnUntil;
-    if (!falling && obs.ai.onGround && this.mem.fallTicks === 0) this.mem.fallTarget = undefined;
-    if (falling && now - this.mem.lastJumpAt > 1100) {
-      const steer = fallSteer(this.game, obs, this.mem);
-      if (steer) {
-        const fire = this.game.buttons.fire as Button;
-        this.apply({ hold: steer.dir ? [steer.dir] : [], turbo: this.game.reflex.turboFire ? [fire] : [], tag: `${steer.dir ?? "still"}+${fire}`, reason: steer.why }, "reflex");
-        return;
-      }
-    }
-    // Reflexes (a bullet, a hazard, something about to touch us) always win. A plan (where to stand,
-    // which target, which ledge) is the code's proposal: a fresh, confident Jev answer overrides it.
-    const jevOver = urgent?.plan && fresh ? this.jevPick(fresh) : undefined;
-    if (urgent && !urgent.plan) {
-      intent = urgent.intent;
-      why = urgent.why;
-    } else if (urgent && jevOver && jevOver !== urgent.intent && (fresh!.probabilities[jevOver] ?? 0) >= 0.45) {
-      intent = jevOver as Intent;
-      src = "jev";
-      why = `Jev ${jevOver} over plan [${urgent.why}]`;
-    } else if (urgent) {
-      intent = urgent.intent;
-      why = urgent.why;
-    } else if (fresh && fresh.sprintNow > 0.65) {
-      intent = "advance_fire";
-      src = "jev";
-      why = `sprint_now ${(fresh.sprintNow * 100).toFixed(0)}%`;
-    } else if (fresh && fresh.proneNow > 0.7 && obs.ai.onGround) {
-      intent = "prone_fire";
-      src = "jev";
-      why = `prone_now ${(fresh.proneNow * 100).toFixed(0)}%`;
-    } else if (fresh && fresh.jumpNow > 0.7 && obs.ai.onGround && now - this.mem.lastJumpAt > 800) {
-      intent = "jump_forward";
-      src = "jev";
-      why = `jump_now ${(fresh.jumpNow * 100).toFixed(0)}%`;
-    } else if (fresh && fresh.partnerInDanger > 0.75 && obs.human.alive && Math.abs(obs.human.x - obs.ai.x) > this.game.reflex.closeDistance) {
-      intent = "follow_partner";
-      src = "jev";
-      why = `partner in danger ${(fresh.partnerInDanger * 100).toFixed(0)}%`;
-    } else if (fresh && this.jevPick(fresh)) {
-      intent = this.jevPick(fresh)! as Intent;
-      src = "jev";
-    } else {
-      const h = heuristicIntent(this.game, obs, this.mem, now);
-      intent = h.intent;
-      why = h.why;
-    }
-    // A jump press is held for a few frames so the emulator registers it even across a tick boundary.
-    if (intent === "jump_forward" || intent === "jump_back" || intent === "jump_up") this.jumpHold = { intent, until: now + 120 };
-    else if (this.jumpHold && now < this.jumpHold.until) intent = this.jumpHold.intent;
-    // A prone dodge is held a little after the trigger disappears so the bullet actually passes.
-    if (intent !== "prone_fire" && this.mem.proneSince) {
-      if (now - this.mem.proneSince < 300 && !urgent) intent = "prone_fire";
-      else this.mem.proneSince = 0;
-    }
-    const action = actionFor(this.game, obs, intent, this.mem, now);
-    action.reason = why || action.reason;
-    this.apply(action, src);
+    const step = this.control.step(obs, now);
+    this.modelStats[step.source === "jev" ? "jevTicks" : "reflexTicks"]++;
+    if (step.interrupted) this.modelStats.interruptions++;
+    this.apply(step.action, step.source);
+    const candidates = this.control.candidates;
+    // A tactical choice is only useful when there is a real alternative.
+    if (!this.useJev || !obs.ai.alive || candidates.length < 2 || this.jevInflight || now - this.jevLastAt < Math.max(600, 1000 / getConfig().ai.jevHz)) return;
+    const epoch = this.control.epoch;
+    const clientEpoch = this.clientEpoch;
+    const askedAt = now;
+    const frame = this.observationFrame;
+    this.jevInflight++;
+    this.jevLastAt = now;
+    this.stats.jevCalls++;
+    const forecasts = this.forecast && frame >= this.forecast.frame && frame - this.forecast.frame <= 60 && this.forecast.level === obs.level && this.forecast.lives === obs.ai.lives ? this.forecast.rows.filter(r => candidates.some(c => c.id === r.id)) : [];
+    void this.decide(this.game, obs, { recent: this.recent.slice(-3), candidates, forecasts, stage: stageBrief(this.game, obs) })
+      .then(d => {
+        if (!d) { this.modelStats.failed++; return; }
+        this.stats.jevIn += d.usage.input;
+        this.stats.jevOut += d.usage.output;
+        this.modelStats.responses++;
+        this.modelStats.latencies.push(d.latencyMs);
+        this.modelStats.model = d.model;
+        const tactic = candidates.find(c => c.id === d.planId);
+        const ttlMs = PLAN_MAX_AGE_MS - (Date.now() - askedAt);
+        const probability = d.probabilities[d.planId ?? ""] ?? 0;
+        const selection: PlanSelection | undefined = tactic ? { tactic, frame, ttlMs, probability } : undefined;
+        const accepted = !this.stopped && this.control.epoch === epoch && !!selection && !!this.lastObs && this.control.accept(selection, this.lastObs, this.observationFrame, Date.now());
+        this.decisionTrace.push({ frame, epoch, options: candidates.map(c => ({ id: c.id, goal: c.description })), forecasts, chosen: d.planId, probabilities: d.probabilities, latencyMs: d.latencyMs, ageMs: Date.now() - askedAt, accepted });
+        if (this.decisionTrace.length > 200) this.decisionTrace.shift();
+        this.modelStats[accepted ? "accepted" : "rejected"]++;
+        if (this.stopped) return;
+        this.op("jev", `${accepted ? "Plan" : "Discarded plan"}: ${tactic?.description ?? "unknown choice"}`, { selected: d.planId, probabilities: d.probabilities, latencyMs: d.latencyMs, ageMs: Date.now() - askedAt, accepted, model: d.model });
+        if (accepted && selection) this.send({ type: "plan", selection: { ...selection, epoch: clientEpoch } });
+      })
+      .catch(err => { this.modelStats.failed++; if (!this.quiet) log.warn(`planner failed: ${String(err)}`); })
+      .finally(() => this.jevInflight--);
   }
 
-  private jevSticky: { action: JevAction; since: number } | undefined;
-  private jumpHold: { intent: "jump_forward" | "jump_back" | "jump_up"; until: number } | undefined;
+  diagnostics() { return { ...this.modelStats, latencies: [...this.modelStats.latencies], clientExecution: this.clientExecution, trace: [...this.decisionTrace] }; }
 
-  /**
-   * Jev's distribution is often flat (top option 20–40%). Twitchy one-off actions (jumps, prone)
-   * need a clear majority; steady ones (advance / follow / hold / aim) are accepted at a lower bar,
-   * and the previous pick is kept unless the new one beats it by a margin (hysteresis).
-   */
-  private jevPick(d: JevDecision): JevAction | undefined {
-    const p = d.probabilities;
-    const twitchy = new Set<JevAction>(["jump_forward", "jump_back", "prone_fire", "retreat"]);
-    const prev = this.jevSticky;
-    const prevP = prev ? (p[prev.action] ?? 0) : 0;
-    const bestP = p[d.action] ?? 0;
-    let pick: JevAction | undefined;
-    if (prev && Date.now() - prev.since < 2000 && prevP >= 0.18 && bestP - prevP < 0.1) pick = prev.action;
-    else if (bestP >= (twitchy.has(d.action) ? 0.4 : 0.25)) pick = d.action;
-    else if (prev && prevP >= 0.18) pick = prev.action;
-    if (pick && pick !== prev?.action) this.jevSticky = { action: pick, since: Date.now() };
-    return pick;
+  async settled() {
+    while (this.jevInflight > 0) await new Promise(resolve => setTimeout(resolve, 10));
   }
 
+  onExecutionReport(value: unknown) {
+    const v = value as typeof this.clientExecution;
+    if (v && [v.jevTicks, v.reflexTicks, v.rejectedPlans].every(n => Number.isSafeInteger(n) && n >= 0 && n < 1_000_000)) this.clientExecution = v;
+  }
+
+  /** Public observations only; reject oversized or malformed client forecasts. */
+  onForecast(value: unknown) {
+    const v = value as { frame?: number; level?: number; lives?: number; rows?: Forecast[] } | undefined;
+    if (!v || !Number.isSafeInteger(v.frame) || !Number.isInteger(v.level) || !Number.isInteger(v.lives) || !Array.isArray(v.rows) || v.rows.length > 6) return;
+    if (!v.rows.every(r => r && typeof r.id === "string" && r.id.length < 160 && typeof r.died === "boolean" && typeof r.partnerDied === "boolean" && Number.isFinite(r.progress) && Math.abs(r.progress) <= 4096 && Number.isFinite(r.separation) && r.separation >= 0 && r.separation <= 256 && r.scenarios === 2)) return;
+    this.forecast = { frame: v.frame!, level: v.level!, lives: v.lives!, rows: v.rows };
+  }
+
+  planningSnapshot() { return { observation: this.lastObs, memory: structuredClone(this.control.mem), candidates: this.control.candidates }; }
+
+  private lastSource = "";
   private apply(action: Action, src: "jev" | "reflex") {
-    if (sameAction(action, this.last)) return;
+    const same = sameAction(action, this.last);
+    if (same && src === this.lastSource) { this.last = action; return; }
+    this.lastSource = src;
     this.last = action;
     this.send({ type: "act", controller: this.game.players.ai, hold: action.hold, turbo: action.turbo, tag: action.tag, src });
     if (action !== IDLE) {
@@ -374,6 +313,10 @@ export class BuddyBrain {
   stop() {
     if (this.stopped) return;
     this.stopped = true;
+    if (!this.quiet && !this.tank) {
+      try { saveDecisionTrace({ game: this.game.id, usage: this.usage(), diagnostics: this.diagnostics() }); }
+      catch (err) { log.warn(`could not save decision trace: ${String(err)}`); }
+    }
     if (!this.quiet) log.info(`brain stopped: ticks=${this.stats.ticks} play=${Math.round(this.playMs / 1000)}s jev=${this.stats.jevCalls} tokens=${this.stats.jevIn}/${this.stats.jevOut} deaths=${this.stats.aiDeaths}/${this.stats.humanDeaths} (${Math.round((Date.now() - this.startedAt) / 1000)}s)`);
   }
 }

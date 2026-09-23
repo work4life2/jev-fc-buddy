@@ -1,4 +1,4 @@
-import { genreOf, type EnemyCategory, type GameProfile, type TankProfile } from "../games/registry.js";
+import type { EnemyCategory, GameProfile, TankProfile } from "../games/registry.js";
 
 /**
  * Turns the raw RAM bytes the browser reports into a game-agnostic observation, using only the
@@ -15,10 +15,13 @@ export interface PlayerObs {
   /** -1 left, 0 still, 1 right (signed byte in RAM) */
   xVel: number;
   onGround: boolean;
+  /** Raw jump-animation flag is clear; unlike onGround, this can be true while falling. */
+  jumpReady?: boolean;
   invincible: boolean;
   weapon: number;
   /** Level-x (screen x + scroll), 0 when the profile has no scroll fields. */
   levelX: number;
+  motion?: "grounded" | "ascending" | "descending" | "falling" | "respawning";
 }
 
 export interface EnemyObs {
@@ -29,11 +32,14 @@ export interface EnemyObs {
   hp: number;
   category: EnemyCategory;
   /**
-   * Velocity per tick RELATIVE to the buddy (change of dx/dy since the previous observation of the
-   * same slot+type). Screen scrolling cancels out; 0 when the object was not seen before.
+   * Relative displacement over the last control observation (legacy reflex units).
+   * Screen scrolling cancels out; 0 when the object was not seen before.
    */
   vx: number;
   vy: number;
+  /** Exact relative pixels per emulator frame for model state and prediction. */
+  vxPerFrame?: number;
+  vyPerFrame?: number;
 }
 
 /** Direction index as top-down games count it: 0 up, 1 left, 2 down, 3 right. */
@@ -163,6 +169,7 @@ function playerOf(game: GameProfile, ram: RamView, idx: 0 | 1, phase: string, le
     gameOver,
     xVel: r.playerXVel ? Math.sign(ram.signed(parseAddr(r.playerXVel[idx]))) : 0,
     onGround: (jump & 0x0f) === 0,
+    jumpReady: (jump & 0x0f) === 0,
     invincible: r.invincible ? ram.byte(parseAddr(r.invincible[idx])) !== 0 : false,
     weapon: r.weapon ? ram.byte(parseAddr(r.weapon[idx])) & 0x0f : 0,
     levelX: levelScrollX + ram.byte(parseAddr(r.playerX[idx])),
@@ -289,12 +296,21 @@ function observeTank(game: GameProfile, t: TankProfile, ram: RamView, prev: Tank
 export function observe(game: GameProfile, bytes: Uint8Array, prev?: Observation): Observation {
   const ram = new RamView(bytes, game.ramRanges);
   const phase = phaseOf(game, ram);
-  if (genreOf(game) === "tank" && game.tank) return observeTankGame(game, game.tank, ram, phase, prev);
+  if ((game.genre === "tank" || game.tank) && game.tank) return observeTankGame(game, game.tank, ram, phase, prev);
   const aiIdx = (game.players.ai - 1) as 0 | 1;
   const humanIdx = (game.players.human - 1) as 0 | 1;
   const level = game.ram.level ? ram.byte(parseAddr(game.ram.level)) : 0;
+  if (prev && (prev.level !== level || prev.phase !== phase)) prev = undefined;
+  const frame = game.ram.frame ? ram.byte(parseAddr(game.ram.frame)) : 0;
+  const elapsedFrames = prev && game.ram.frame ? (frame - prev.frame + 256) % 256 : 2.5;
   const levelScrollX = game.ram.screenNumber && game.ram.screenScroll ? ram.byte(parseAddr(game.ram.screenNumber)) * 256 + ram.byte(parseAddr(game.ram.screenScroll)) : 0;
   const aiNow = playerOf(game, ram, aiIdx, phase, levelScrollX);
+  const humanNow = playerOf(game, ram, humanIdx, phase, levelScrollX);
+  for (const [current, before] of [[aiNow, prev?.ai], [humanNow, prev?.human]] as const) {
+    const dy = before?.alive && current.alive ? current.y - before.y : 0;
+    current.motion = !current.alive ? "respawning" : current.onGround && dy > 0 ? "falling" : !current.onGround ? (dy < 0 ? "ascending" : "descending") : "grounded";
+    if (current.motion === "falling") current.onGround = false;
+  }
   const enemies: EnemyObs[] = [];
   const e = game.ram.enemies;
   if (e) {
@@ -313,20 +329,22 @@ export function observe(game: GameProfile, bytes: Uint8Array, prev?: Observation
       const was = prev?.enemies.find((p) => p.slot === i && p.type === type);
       const vx = was ? x - aiNow.x - (was.x - prev!.ai.x) : 0;
       const vy = was ? y - aiNow.y - (was.y - prev!.ai.y) : 0;
-      enemies.push({ slot: i, x, y, type, hp: eh >= 0 ? ram.byte(eh + i) : 0, category, vx: Math.abs(vx) > 48 ? 0 : vx, vy: Math.abs(vy) > 48 ? 0 : vy });
+      const safeX = Math.abs(vx) > 48 ? 0 : vx;
+      const safeY = Math.abs(vy) > 48 ? 0 : vy;
+      enemies.push({ slot: i, x, y, type, hp: eh >= 0 ? ram.byte(eh + i) : 0, category, vx: safeX, vy: safeY, vxPerFrame: safeX / Math.max(1, elapsedFrames), vyPerFrame: safeY / Math.max(1, elapsedFrames) });
     }
   }
   const scrollType = game.ram.scrollType ? ram.byte(parseAddr(game.ram.scrollType)) : 0;
   return {
     game: game.id,
-    frame: game.ram.frame ? ram.byte(parseAddr(game.ram.frame)) : 0,
+    frame,
     phase,
     playerMode: game.ram.playerMode ? ram.byte(parseAddr(game.ram.playerMode)) : 1,
     level,
     levelDirection: scrollType === 1 ? "up" : "right",
     corridor: game.ram.locationType ? ram.byte(parseAddr(game.ram.locationType)) === 1 : false,
     ai: aiNow,
-    human: playerOf(game, ram, humanIdx, phase, levelScrollX),
+    human: humanNow,
     enemies,
     screen: game.screen,
     levelScrollX,
