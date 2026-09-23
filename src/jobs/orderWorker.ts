@@ -5,7 +5,7 @@ import { getSessionMinutes } from "../runtimeConfig.js";
 import { logger } from "../log.js";
 import { notify } from "../notify.js";
 import { sleep } from "../util/exec.js";
-import { termix, type TxIntent } from "../termix/client.js";
+import { termix, type RemoteConversation, type TxIntent } from "../termix/client.js";
 import { codesForOrder, coinsForPrice, findCodeByOrder, isUsed, mintCode, revokeCode, type CoinCode } from "../coins/store.js";
 import { playableGames } from "../games/registry.js";
 import { createJob, findJobByOrder, loadConversation, saveJob, type Job } from "./store.js";
@@ -192,11 +192,17 @@ export async function processOrder(orderId: string): Promise<Job | undefined> {
     }
     job.code = code.code;
     job.coins = code.coins;
+    job.conversationId ??= await findBuyerConversation(order).catch((err) => {
+      log.warn(`order ${orderId}: could not find the buyer conversation: ${String(err)}`);
+      return undefined;
+    });
     saveJob(job);
     if (job.status !== "delivered" && job.status !== "settled") await deliver(job, code);
     await notify("job.delivered", { orderId, code: code.code, coins: code.coins, tx: job.txHashes });
     if (job.conversationId) {
       await postNotice(job.conversationId, `✅ Delivered! ${deliveryText(code)}`).catch((err) => log.warn(`could not post delivery notice: ${String(err)}`));
+    } else {
+      log.warn(`order ${orderId}: no buyer conversation found, the code is only in the order delivery`);
     }
     return job;
   } catch (err) {
@@ -410,6 +416,56 @@ export async function claimExpiredDeliveries(): Promise<number> {
     }
   }
   return claimed;
+}
+
+/**
+ * Orders waiting on us right now. The watcher only announces FUNDED orders, but listing checkouts
+ * land in PENDING_ACCEPT (the provider accepts on-chain first), so without this poll a new order
+ * waited for the next full sweep — minutes. Failed jobs are left to the sweep so a broken order
+ * is not retried every few seconds.
+ */
+export async function pollNewOrders(): Promise<string[]> {
+  // The list filter rejects status=PENDING_ACCEPT; the list is newest-first, so the head is enough.
+  const res = await termix().get<{ items?: Order[] } | Order[]>(`/api/v1/orders?side=provider&pageSize=20`);
+  const ids: string[] = [];
+  for (const o of Array.isArray(res) ? res : (res.items ?? [])) {
+    if (!ownsOrder(o) || !["PENDING_ACCEPT", "FUNDED"].includes(o.status)) continue;
+    const job = findJobByOrder(o.id);
+    if (!job || !["delivered", "settled", "failed"].includes(job.status)) ids.push(o.id);
+  }
+  return ids;
+}
+
+const hasOrderEvent = (c: RemoteConversation, orderId: string) =>
+  [c.lastMessage, ...(c.messages ?? [])].some((m) => m?.businessType === "order" && m.businessId === orderId);
+
+/**
+ * Listing checkouts carry no conversationId on the order, but the platform opens the order in a
+ * buyer↔agent thread ("Conversation opened for this order", then the chain events). That thread
+ * is the buyer's inbox for this order: find it so the delivery message lands where they look.
+ * A buyer can have several threads with us (one per quote), hence the match on the order event.
+ */
+export async function findBuyerConversation(order: Order): Promise<string | undefined> {
+  const agentId = getConfig().termix.agentId;
+  const buyerId = order.buyer?.id;
+  if (!agentId || !buyerId) return undefined;
+  const tx = termix();
+  const candidates = (await tx.conversations())
+    .filter((c) => {
+      const parts = c.participants ?? [];
+      return parts.some((p) => p.agentId === agentId) && parts.some((p) => p.role === "BUYER" && p.accountId === buyerId);
+    })
+    .sort((a, b) => String(b.updatedAt ?? "").localeCompare(String(a.updatedAt ?? "")));
+  const direct = candidates.find((c) => c.orderId === order.id || hasOrderEvent(c, order.id));
+  if (direct) return direct.id;
+  for (const c of candidates.slice(0, 5)) {
+    const full = await tx.conversation(c.id);
+    if (full && hasOrderEvent(full, order.id)) return c.id;
+  }
+  // No order thread (yet): the quote's thread is still a conversation the buyer has with us.
+  const offerId = typeof order.offerId === "string" ? order.offerId : undefined;
+  const offer = offerId ? await tx.get<{ conversationId?: string; item?: { conversationId?: string } }>(`/api/v1/offers/${offerId}`).catch(() => undefined) : undefined;
+  return offer?.conversationId ?? offer?.item?.conversationId ?? candidates[0]?.id;
 }
 
 /** Sweep provider orders: accept/deliver anything actionable that events may have missed. */

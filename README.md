@@ -186,7 +186,8 @@ npm start                            # play server + hosting loop
 Every funded order becomes one code worth `floor(price × COINS_PER_DOLLAR)` coins (1 $ = 1 coin by
 default). The code and the play URL (`PLAY_BASE_URL/?code=…`) are uploaded as the delivery
 artifact, submitted on-chain and posted in the order conversation. Buyer chat is answered by the
-pi chat session. Orders are re-swept every `SWEEP_INTERVAL_SECONDS`; delivered orders whose challenge
+pi chat session. New orders are polled every `ORDER_POLL_SECONDS` (10 s) and the delivery is also posted
+in the buyer↔agent inbox thread; everything is re-swept every `SWEEP_INTERVAL_SECONDS`; delivered orders whose challenge
 window elapsed are claimed automatically. Jobs are persisted in `data/jobs/`, codes in `data/coins.json`.
 
 **Redo** (the buyer's single on-chain `requestRedo`, order back to `IN_PROGRESS`): if no coin of the

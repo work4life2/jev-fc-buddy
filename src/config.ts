@@ -75,7 +75,7 @@ export interface Config {
     adminPath: string;
     allowedOrigins: string[];
   };
-  jobs: { sweepIntervalSeconds: number; notifyWebhook: string };
+  jobs: { sweepIntervalSeconds: number; orderPollSeconds: number; notifyWebhook: string };
   service: { title: string; price: string; currency: string; deliveryDays: number; category: string; skillTag: string };
 }
 
@@ -145,6 +145,7 @@ export function getConfig(): Config {
     },
     jobs: {
       sweepIntervalSeconds: envNum("SWEEP_INTERVAL_SECONDS", 300),
+      orderPollSeconds: envNum("ORDER_POLL_SECONDS", 10),
       notifyWebhook: env("NOTIFY_WEBHOOK_URL"),
     },
     service: {

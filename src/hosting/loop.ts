@@ -4,7 +4,7 @@ import { notify } from "../notify.js";
 import { sleep } from "../util/exec.js";
 import { termix, type WatchEvent } from "../termix/client.js";
 import { handleChatMessage } from "../jobs/chat.js";
-import { claimExpiredDeliveries, processOrder, sweepOrders } from "../jobs/orderWorker.js";
+import { claimExpiredDeliveries, pollNewOrders, processOrder, sweepOrders } from "../jobs/orderWorker.js";
 
 const log = logger("hosting");
 
@@ -78,6 +78,18 @@ export class HostingLoop {
     }
   }
 
+  /** Fast lane for new orders, beside the watcher (which never announces PENDING_ACCEPT). */
+  private async pollOrders() {
+    while (!this.stopped) {
+      try {
+        for (const id of await pollNewOrders()) this.enqueueOrder(id, "order poll");
+      } catch (err) {
+        log.warn(`order poll failed: ${String(err)}`);
+      }
+      await sleep(getConfig().jobs.orderPollSeconds * 1000);
+    }
+  }
+
   async run(): Promise<void> {
     const tx = termix();
     log.info(`hosting agent ${this.agentId} on chain ${getConfig().termix.chain}`);
@@ -88,6 +100,7 @@ export class HostingLoop {
       /* cloud hosting may not be configured */
     }
     await notify("hosting.started", { agentId: this.agentId });
+    const orderPoll = this.pollOrders();
     let failures = 0;
     while (!this.stopped) {
       await this.sweep();
@@ -104,7 +117,7 @@ export class HostingLoop {
         await sleep(backoff * 1000);
       }
     }
-    await Promise.allSettled([...this.running.values()]);
+    await Promise.allSettled([orderPoll, ...this.running.values()]);
     await notify("hosting.stopped", { agentId: this.agentId });
   }
 }
