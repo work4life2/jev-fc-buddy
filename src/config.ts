@@ -121,7 +121,7 @@ export function getConfig(): Config {
     },
     coins: {
       perDollar: envNum("COINS_PER_DOLLAR", 1),
-      sessionMinutes: envNum("COIN_SESSION_MINUTES", 10),
+      sessionMinutes: envNum("COIN_SESSION_MINUTES", 30),
       codePrefix: env("COIN_CODE_PREFIX", "FC"),
     },
     termix: {

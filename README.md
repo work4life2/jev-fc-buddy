@@ -67,7 +67,7 @@ with no token configured only loopback callers are admins.
 
 ### Coins and play windows
 
-One coin opens a play window of `COIN_SESSION_MINUTES` (default 10; the dashboard can change it at runtime,
+One coin opens a play window of `COIN_SESSION_MINUTES` (default 30; the dashboard can change it at runtime,
 new coins only). The clock starts when the coin is inserted and keeps running whether or not the page is
 open, so a player can quit and come back with the same code for free while the window lasts. Only one
 browser session per window can run at a time: inserting the code elsewhere takes over. When the window
