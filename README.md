@@ -189,6 +189,14 @@ artifact, submitted on-chain and posted in the order conversation. Buyer chat is
 pi chat session. Orders are re-swept every `SWEEP_INTERVAL_SECONDS`; delivered orders whose challenge
 window elapsed are claimed automatically. Jobs are persisted in `data/jobs/`, codes in `data/coins.json`.
 
+**Redo** (the buyer's single on-chain `requestRedo`, order back to `IN_PROGRESS`): if no coin of the
+delivered code was ever inserted, the code is revoked and a fresh one of the same value is delivered;
+if a coin was inserted, the redo is refused, the original code is re-delivered with an explanation
+and the buyer keeps accept/challenge. **Challenge** (order `IN_DISPUTE`): during the evidence phase
+the worker uploads `usage-evidence.json` (codes, play windows, minutes played, AI calls, delivery tx)
+plus a text summary to the dispute, once. Accepting or escalating the verdict is left to the operator
+(see `skills/termix-agent-skills/docs/provider-dispute.md`).
+
 ## Deploying (bare-metal, pull-based)
 
 `deploy/` mirrors 3dcardagent's setup: a systemd service, a one-minute timer that redeploys when

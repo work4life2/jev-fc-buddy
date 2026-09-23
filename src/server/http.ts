@@ -173,6 +173,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       json(res, 404, { error: "unknown code" });
       return;
     }
+    if (code.revokedAt) {
+      json(res, 410, { error: "this code was replaced after a redo; use the new code from your order delivery" });
+      return;
+    }
     json(res, 200, codePublic(code));
     return;
   }
@@ -185,7 +189,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
     }
     const spent = spendCoin(String(body.code ?? ""), game.id);
     if (!spent) {
-      json(res, 402, { error: findCode(String(body.code ?? "")) ? "no coins left on this code" : "unknown code" });
+      const known = findCode(String(body.code ?? ""));
+      json(res, known?.revokedAt ? 410 : 402, {
+        error: known?.revokedAt ? "this code was replaced after a redo; use the new code from your order delivery" : known ? "no coins left on this code" : "unknown code",
+      });
       return;
     }
     // One window, one live browser session: a second tab (or a second person with the code) takes over.

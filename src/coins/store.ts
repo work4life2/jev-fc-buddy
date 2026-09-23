@@ -46,6 +46,11 @@ export interface CoinCode {
   buyer?: string;
   note?: string;
   sessions: CoinWindow[];
+  /** Set when the code was destroyed (e.g. replaced after a buyer redo). A revoked code cannot be inserted. */
+  revokedAt?: string;
+  revokedReason?: string;
+  /** The code minted to replace this one, when revoked for a redo. */
+  replacedBy?: string;
 }
 
 interface CoinFile {
@@ -114,12 +119,41 @@ export function findCode(input: string): CoinCode | undefined {
   return load().codes[body];
 }
 
+/** The live (non-revoked) code sold in an order. Revoked predecessors are listed by `codesForOrder`. */
 export function findCodeByOrder(orderId: string): CoinCode | undefined {
-  return Object.values(load().codes).find((c) => c.orderId === orderId);
+  return codesForOrder(orderId).find((c) => !c.revokedAt);
+}
+
+/** Every code ever minted for an order, oldest first (a redo leaves the revoked original behind). */
+export function codesForOrder(orderId: string): CoinCode[] {
+  return Object.values(load().codes)
+    .filter((c) => c.orderId === orderId)
+    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
 export function remaining(c: CoinCode): number {
+  if (c.revokedAt) return 0;
   return Math.max(0, c.coins - c.used);
+}
+
+/** True once at least one coin of this code was inserted (a play window was opened). */
+export function isUsed(c: CoinCode): boolean {
+  return c.used > 0 || c.sessions.length > 0;
+}
+
+/**
+ * Destroy a code so it can no longer be inserted. Refuses (returns false) when a coin was already
+ * inserted: a used code is a consumed service, not something we take back.
+ */
+export function revokeCode(input: string, reason: string, replacedBy?: string): boolean {
+  const c = findCode(input);
+  if (!c || c.revokedAt) return false;
+  if (isUsed(c)) return false;
+  c.revokedAt = new Date().toISOString();
+  c.revokedReason = reason;
+  c.replacedBy = replacedBy;
+  save();
+  return true;
 }
 
 /** The coin window that is still running on this code, if any (not ended by time, expiresAt in the future). */
@@ -146,7 +180,7 @@ export interface SpendResult {
  */
 export function spendCoin(input: string, gameId: string): SpendResult | undefined {
   const c = findCode(input);
-  if (!c) return undefined;
+  if (!c || c.revokedAt) return undefined;
   const now = Date.now();
   const running = activeWindow(c, now);
   if (running) {

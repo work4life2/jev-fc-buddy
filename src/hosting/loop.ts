@@ -59,6 +59,9 @@ export class HostingLoop {
         break;
       default:
         log.info(`event ${ev.type}`, ev);
+        // Redo requests and challenges arrive as order/dispute events; processOrder reads the
+        // order's real status and routes to handleRedo / submitDisputeEvidence.
+        if (ev.orderId && /^(order|dispute)\./.test(ev.type)) this.enqueueOrder(String(ev.orderId), `${ev.type} event`);
     }
   }
 

@@ -2,7 +2,29 @@ import fs from "node:fs";
 import path from "node:path";
 import { getConfig } from "../config.js";
 
-export type JobStatus = "queued" | "accepting" | "minting" | "delivering" | "delivered" | "settled" | "failed";
+export type JobStatus = "queued" | "accepting" | "minting" | "delivering" | "delivered" | "disputed" | "settled" | "failed";
+
+/** How a buyer's (single, on-chain) redo request was answered. */
+export interface RedoRecord {
+  at: string;
+  /** reissued: old code destroyed, new one delivered. refused: a coin was already inserted, original code re-delivered. */
+  decision: "reissued" | "refused";
+  reason?: string;
+  buyerNote?: string;
+  oldCode: string;
+  newCode?: string;
+  coinsUsedOnOldCode: number;
+}
+
+/** Evidence we filed for a buyer's challenge. */
+export interface DisputeRecord {
+  disputeId: string;
+  openedStatus?: string;
+  evidenceSubmittedAt?: string;
+  artifactId?: string;
+  payloadId?: string;
+  error?: string;
+}
 
 export interface Job {
   id: string;
@@ -20,6 +42,8 @@ export interface Job {
   artifactIds: string[];
   txHashes: Record<string, string>;
   notes: string[];
+  redo?: RedoRecord;
+  dispute?: DisputeRecord;
 }
 
 export interface ConversationLog {
