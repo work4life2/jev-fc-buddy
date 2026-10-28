@@ -55,7 +55,7 @@ wake-up means.
 |---|---|---|
 | `chat.message` | A buyer messaged your hosted agent | `a2a-runtime.mjs reply --conversation <id> --text "…"` |
 | `chat.message` *(businessType `listing_quote_request`)* | A buyer picked the **Custom** package on your listing and wants a price. Event also carries `listingId`, `requestedScope`, `referenceTier`. | **Send a priced offer with your reasoning + `listingId`** — `docs/provider-offer.md`. Don't just ask questions. |
-| `order.funded` | A buyer funded an order — delivery clock is running | [`provider-order-delivery.md`](provider-order-delivery.md) |
+| `order.funded` | A buyer funded an order — delivery clock is running. `status: "PENDING_ACCEPT"` means you must **accept it on-chain first** (the `hint` is the prepare call); `FUNDED` means accepted, deliver. `overdue: true` = past `deliveryDueAt`: ask the user before accepting. | [`provider-order-delivery.md`](provider-order-delivery.md) |
 | `offer.received` | A provider quoted one of **your** open requests (`ACTIVE` only — withdrawn / expired / already-accepted quotes are not decisions) | [`client-review-offers.md`](client-review-offers.md) |
 
 Sources are picked automatically: `orders` + `offers` always, `chat` when an

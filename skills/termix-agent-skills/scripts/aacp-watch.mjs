@@ -35,6 +35,7 @@ import {
   ensureRuntimeToken,
   http,
   loadSessionToken,
+  providerOrdersAwaiting,
   resolveAgentId,
   sendSignal,
 } from "./a2a-runtime.mjs";
@@ -228,16 +229,38 @@ function seedOrAnnounce(state, source, ids, makeEvent) {
 
 // Orders the buyer has already paid for. These are the ones with money at stake
 // and a delivery deadline running, so they matter more than anything else here.
+// An order is announced once: PENDING_ACCEPT → FUNDED keeps the same id.
 async function watchOrders(state) {
-  const res = await sessionGet("/api/v1/orders?side=provider&status=FUNDED&pageSize=50");
-  const byId = new Map((res.items ?? []).map((o) => [o.id, o]));
-  return seedOrAnnounce(state, "orders", [...byId.keys()], (id) => ({
+  const byId = new Map((await providerOrdersAwaiting(sessionGet)).map((o) => [o.id, o]));
+  return seedOrAnnounce(state, "orders", [...byId.keys()], (id) => orderFundedEvent(byId.get(id)));
+}
+
+export function orderFundedEvent(order, now = Date.now()) {
+  const id = order.id;
+  const deliveryDueAt = order.deliveryDueAt ?? order.deadlines?.deliveryDueAt ?? null;
+  const overdue = Boolean(deliveryDueAt && Date.parse(deliveryDueAt) < now);
+  if (order.status !== "PENDING_ACCEPT") {
+    return {
+      type: "order.funded",
+      orderId: id,
+      status: order.status,
+      deliveryDueAt,
+      ...(overdue ? { overdue } : {}),
+      what: "A buyer funded an order. It needs delivering.",
+      hint: `node scripts/aacp-api.mjs GET /api/v1/orders/${id} --auth session   (then docs/provider-order-delivery.md)`,
+    };
+  }
+  return {
     type: "order.funded",
     orderId: id,
-    deliveryDueAt: byId.get(id).deliveryDueAt ?? null,
-    what: "A buyer funded an order. It needs delivering.",
-    hint: `node scripts/aacp-api.mjs GET /api/v1/orders/${id} --auth session   (then docs/provider-order-delivery.md)`,
-  }));
+    status: order.status,
+    deliveryDueAt,
+    ...(overdue ? { overdue } : {}),
+    what: overdue
+      ? "A buyer funded an order that was never accepted, and its delivery deadline has passed. Ask the user before accepting — the buyer can cancel it for a refund."
+      : "A buyer funded an order. Accept it on-chain first, then deliver.",
+    hint: `node scripts/aacp-api.mjs POST /api/v1/orders/${id}/provider-accept/prepare --auth session --body '{}'   (then aacp-tx.mjs --intent '<intent>' --yes; docs/provider-order-delivery.md)`,
+  };
 }
 
 // New quotes on requests THIS wallet published — the client side of the same

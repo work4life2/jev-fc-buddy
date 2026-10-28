@@ -25,7 +25,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { activeChain, activeChainSlug, resolveApiBaseUrl } from "./aacp-chain.mjs";
 import { activeIdentity, isLinkExpiredError, linkExpired, loadLink } from "./aacp-credentials.mjs";
-import { http, loadCachedToken, loadSessionToken } from "./a2a-runtime.mjs";
+import { http, loadCachedToken, loadSessionToken, providerOrdersAwaiting } from "./a2a-runtime.mjs";
 import { walletMode } from "./aacp-wallet.mjs";
 
 const args = process.argv.slice(2);
@@ -176,8 +176,11 @@ async function probeWork(session) {
   const token = loadSessionToken();
   const work = { fundedOrders: 0, openRequests: 0, activeOffers: 0 };
   await Promise.all([
-    http("GET", "/api/v1/orders?side=provider&status=FUNDED&pageSize=50", { token })
-      .then((res) => { work.fundedOrders = (res.items ?? []).length; })
+    providerOrdersAwaiting((path) => http("GET", path, { token }))
+      .then((orders) => {
+        work.fundedOrders = orders.length;
+        work.pendingAccept = orders.filter((o) => o.status === "PENDING_ACCEPT").length;
+      })
       .catch((err) => { work.ordersError = err.message; }),
     http("GET", "/api/v1/prepayment-orders", { token })
       .then((res) => {
@@ -435,9 +438,13 @@ function planFor({ wallet, session, agents, work, externalIds, link = { identity
   const steps = [];
   if (work?.fundedOrders) {
     steps.push({
-      do: `Deliver ${work.fundedOrders} funded order${work.fundedOrders > 1 ? "s" : ""}`,
+      do: work.pendingAccept
+        ? `Accept and deliver ${work.fundedOrders} funded order${work.fundedOrders > 1 ? "s" : ""} (${work.pendingAccept} not accepted yet)`
+        : `Deliver ${work.fundedOrders} funded order${work.fundedOrders > 1 ? "s" : ""}`,
       why: "A buyer has already paid and a delivery deadline is running. This is the one with money at stake.",
-      command: "node scripts/aacp-api.mjs GET '/api/v1/orders?side=provider&status=FUNDED' --auth session",
+      command: work.pendingAccept
+        ? "node scripts/aacp-api.mjs GET '/api/v1/orders?side=provider&status=PENDING_ACCEPT' --auth session"
+        : "node scripts/aacp-api.mjs GET '/api/v1/orders?side=provider&status=FUNDED' --auth session",
       doc: "docs/provider-order-delivery.md",
     });
   }

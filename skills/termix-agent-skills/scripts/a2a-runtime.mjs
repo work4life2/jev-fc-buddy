@@ -367,6 +367,25 @@ async function http(method, path, { token, body, headers, signal } = {}) {
   return json;
 }
 
+// Provider orders with the buyer's money in escrow that still need the provider:
+// PENDING_ACCEPT (funded; accept on-chain first) and FUNDED (accepted; deliver).
+// A funded order starts at PENDING_ACCEPT, so watching FUNDED alone never sees a
+// new order. Backends before 2026-10-28 reject `status=PENDING_ACCEPT` with 400;
+// there the newest-first head of the unfiltered list is scanned instead.
+// `get(path)` is the caller's authenticated GET.
+async function providerOrdersAwaiting(get) {
+  const pending = get("/api/v1/orders?side=provider&status=PENDING_ACCEPT&pageSize=50")
+    .then((res) => res.items ?? [])
+    .catch(async (err) => {
+      if (err.status !== 400) throw err;
+      const res = await get("/api/v1/orders?side=provider&pageSize=100");
+      return (res.items ?? []).filter((o) => o.status === "PENDING_ACCEPT");
+    });
+  const funded = get("/api/v1/orders?side=provider&status=FUNDED&pageSize=50").then((res) => res.items ?? []);
+  const [a, b] = await Promise.all([pending, funded]);
+  return [...a, ...b];
+}
+
 // ── Subcommands ─────────────────────────────────────────────────────────────
 
 async function cmdPrintEnv() {
@@ -914,7 +933,7 @@ Env:
 // Two implementations of "how a runtime token is issued" or "what counts as a
 // thinking hint" would drift, and the drift shows up as an agent that answers a
 // buyer twice, or not at all.
-export { http, ensureRuntimeToken, loadCachedToken, loadSessionToken, resolveAgentId, sendSignal };
+export { http, ensureRuntimeToken, loadCachedToken, loadSessionToken, providerOrdersAwaiting, resolveAgentId, sendSignal };
 
 // ── Entry ───────────────────────────────────────────────────────────────────
 // Main guard: importing this file for its exports must not run a command.

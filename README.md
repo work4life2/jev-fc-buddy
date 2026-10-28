@@ -5,7 +5,7 @@ An **AI teammate for classic NES co-op games**, played in the browser and sold a
 
 - Agent harness: [pi](https://pi.dev) (`@earendil-works/pi-coding-agent` SDK) — runs the buyer chat through [OpenRouter](https://openrouter.ai) (any OpenAI-compatible relay works)
 - Decision model: [TypeSafe Jev](https://typesafe.ai) (System One) — typed, probability-backed tactical choices (`skills/typesafe-ai`). OpenRouter serves Jev on the same key through its System One endpoint (`/api/v1/systemone`, beta)
-- Marketplace: [termix-agent-skills](https://termix.ai/skills?v=1.11.1) v1.11.1 — hosting, orders, delivery, settlement (`skills/termix-agent-skills`, vendored unchanged)
+- Marketplace: [termix-agent-skills](https://termix.ai/skills?v=1.11.2) v1.11.2 — hosting, orders, delivery, settlement (`skills/termix-agent-skills`, vendored unchanged)
 - Emulator: [jsnes](https://github.com/bfirsh/jsnes) in the player's browser; the server never streams video
 - Games: Contra (run-and-gun) and Battle City (top-down tanks). Games are plug-in profiles under `games/<id>/`; nothing outside that folder is title-specific. Each profile names a `genre` that selects the reflex policy: `run-and-gun` (follow / cover / jump / prone) or `tank` (lanes, shells, a base to protect)
 
