@@ -393,8 +393,7 @@ export async function submitDisputeEvidence(orderId: string, order?: Order, job?
 /** Claim escrow for DELIVERED orders whose challenge window has elapsed. */
 export async function claimExpiredDeliveries(): Promise<number> {
   const tx = termix();
-  const res = await tx.get<{ items?: Order[] } | Order[]>(`/api/v1/orders?side=provider`);
-  const items = Array.isArray(res) ? res : (res.items ?? []);
+  const items = await listProviderOrders({ status: "DELIVERED" });
   let claimed = 0;
   for (const o of items) {
     if (!ownsOrder(o) || o.status !== "DELIVERED" || !o.challengeWindowEndsAt) continue;
@@ -468,11 +467,37 @@ export async function findBuyerConversation(order: Order): Promise<string | unde
   return offer?.conversationId ?? offer?.item?.conversationId ?? candidates[0]?.id;
 }
 
+const PAGE_SIZE = 100;
+/** How far back the newest-first scan looks for PENDING_ACCEPT orders (well past their delivery deadline). */
+const PENDING_SCAN_MS = 3 * 24 * 3600_000;
+
+/**
+ * Provider orders across all pages, newest first. The list returns 20 per page by default; reading only
+ * the head lost older orders once a burst of new ones (1,500 bot orders on 2026-10-26) pushed them off it.
+ * `newerThanMs` stops paging once the list reaches orders created before that time.
+ */
+async function listProviderOrders(query: { status?: string; newerThanMs?: number } = {}): Promise<Order[]> {
+  const out: Order[] = [];
+  for (let page = 1; page <= 100; page++) {
+    const status = query.status ? `&status=${query.status}` : "";
+    const res = await termix().get<{ items?: Order[] } | Order[]>(`/api/v1/orders?side=provider&pageSize=${PAGE_SIZE}&page=${page}${status}`);
+    const items = Array.isArray(res) ? res : (res.items ?? []);
+    out.push(...items);
+    if (items.length < PAGE_SIZE) break;
+    if (query.newerThanMs && items.some((o) => typeof o.createdAt === "string" && Date.parse(o.createdAt) < query.newerThanMs!)) break;
+  }
+  return out;
+}
+
 /** Sweep provider orders: accept/deliver anything actionable that events may have missed. */
 export async function sweepOrders(): Promise<string[]> {
-  const tx = termix();
-  const res = await tx.get<{ items?: Order[] } | Order[]>(`/api/v1/orders?side=provider`);
-  const items = Array.isArray(res) ? res : (res.items ?? []);
+  // The list filter rejects status=PENDING_ACCEPT, so new orders come from the recent head of the list;
+  // everything else is fetched by status so it cannot be buried.
+  const lists = await Promise.all([
+    listProviderOrders({ newerThanMs: Date.now() - PENDING_SCAN_MS }),
+    ...["FUNDED", "IN_PROGRESS", "IN_DISPUTE", "DELIVERED"].map((status) => listProviderOrders({ status })),
+  ]);
+  const items = [...new Map(lists.flat().map((o) => [o.id, o])).values()];
   const actionable: string[] = [];
   for (const o of items) {
     if (!ownsOrder(o)) continue;
