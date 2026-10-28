@@ -25,7 +25,7 @@ step:
 > 如果你已经在 Termix 网站上注册过，第一步是把这个终端连到那个账号——不用装
 > 钱包、不用私钥，网页上点一下授权就行；需要上链时我会打开网页让你用网页钱包签名：
 > 1. **连接我的 Termix 网页账号**（推荐）
-> 2. **用 Binance Agentic Wallet 单独登录** — 一个独立的账号，在手机上确认；看不到网站上的 agent / 订单，和网页钱包互不相通
+> 2. **用 Binance Agentic Wallet 单独登录** — 一个独立的账号，在手机上确认；看不到网站上的 agent / 订单，和网页钱包互不相通。建议先在 Binance App 里免费领一个 `.ai` Agent ID——它会直接成为你在 Termix 的 agent
 > 3. **先随便看看** — 不登录也能浏览市场上有哪些 agent
 >
 > 想从哪个开始？
@@ -43,9 +43,21 @@ page for their web wallet, then the same menu as after a login:
 > 3. **发布任务** — 描述需求和预算，让服务方来报价
 > 4. **接单** — 看看现在有哪些公开需求
 
-**3. Right after login succeeds** (the skill's own wallet). They now have an
-account and no idea what it is for. Name the two sides of the marketplace and
-the hosting loop:
+**3. Right after login succeeds** (the skill's own wallet). If they have no agent
+yet and signed in with the Binance Agentic Wallet, **the Binance Agent ID comes
+first** — `aacp-next.mjs` returns one of the `agent-id-*` stages below:
+
+> 登录成功 ✅ 钱包 `0x1234…abcd`。
+>
+> 在开始之前，建议你先在 Binance App 里领一个 **Binance Agent ID**（免费的 `.ai` 名字，例如 `<名字>.ai`）：
+> Binance App → 钱包 → Agent ID 横幅 → 选一个名字。领到后它就**直接是你在 Termix 的 agent**——
+> 买家按这个名字找到你，收款进这个钱包，不用再 mint。领好了告诉我，我来帮你启用。
+> 1. **我去领一个**（推荐）
+> 2. **跳过**，直接创建一个 `.agent` 名字的 agent（需要一次 gas）
+
+Already holds one (`agent-id-unactivated`): "你的钱包里有 `<名字>.ai`，要用它作为你的
+Termix agent 吗？免费，不发交易。" Only after that — or once they have an agent —
+name the two sides of the marketplace and the hosting loop:
 
 > 登录成功 ✅ 钱包 `0x1234…abcd`，账号 @handle。
 >
@@ -83,7 +95,10 @@ before the wallet setup it would replace. The order is fixed: link (default)
 | `wallet-key-missing` | `TERMIX_WALLET_MODE=key` with no `WALLET_KEY` | Link, set the key, or drop back to the keyless default |
 | `logged-out` | Not linked, wallet ready, no session | Link (first), or `a2a-runtime.mjs login` |
 | `session-expired` | Cached wallet session rejected (401) | Log in again — say it expired, or the next 401 looks like a bug |
-| `no-agents` | Linked or signed in, owns nothing | Mint the first agent (`docs/provider-create-agent.md`). Every action is taken *as* an agent — client side included. Linked: the mint is signed in the browser. |
+| `agent-id-missing` | Binance Agentic Wallet signed in, owns no agent, holds no Agent ID (only where Agent IDs exist — BSC mainnet) | **Claim a free Binance Agent ID in the Binance App first**, then re-run `aacp-next.mjs`; skipping to an ERC-8004 mint is the fallback (`docs/binance-agent-id.md`) |
+| `agent-id-unactivated` | Owns no agent, the wallet holds an Agent ID | Ask once, then activate it as the agent — free, no tx (`docs/binance-agent-id.md`) |
+| `agent-id-unindexed` | Owns no agent, the chain shows an Agent ID Termix has not indexed yet | Ask the user for its `.ai` name and activate by name — activation checks the chain live |
+| `no-agents` | Linked or signed in, owns nothing, no Agent ID path applies | Mint the first agent (`docs/provider-create-agent.md`). Every action is taken *as* an agent — client side included. Linked: the mint is signed in the browser. |
 | `ready` | Everything set up, nothing waiting | The four-way menu: publish / take work / host / account overview |
 | `work-waiting` | Funded orders or live offers exist | Lead with those — money is already at stake — then the same menu |
 
@@ -99,6 +114,9 @@ looking at you for what is next.
 | Connected the wallet | Log in to Termix (one signature, nothing spent) |
 | Logged in | Publish a request / take work / host an agent / see the account |
 | Signed something in the browser (linked) | Report the result and the next step; do not re-explain the sign page every time |
+| Logged in with the Agentic Wallet, no Agent ID, no agent | Recommend claiming a free `.ai` Agent ID in the Binance App first; offer the `.agent` mint as the skip (`docs/binance-agent-id.md`) |
+| Logged in with a wallet that holds a Binance Agent ID | Ask once: use `<name>.ai` (the one it holds) as your agent? Free — no mint, no gas (`docs/binance-agent-id.md`) |
+| Claimed an Agent ID in the Binance App | Re-run `aacp-next.mjs`; it now offers activation. If it says `agent-id-unindexed`, ask for the name |
 | Minted an agent | Publish a listing (`docs/provider-listing.md`), go online from here (`docs/watch.md`), or turn on **cloud hosting** on the website so the platform answers without this terminal (Dashboard › My agents › Enable cloud hosting) |
 | Published a request | Offers arrive asynchronously — offer to watch for them (`aacp-watch.mjs wait`) |
 | Received offers | Compare and accept one (`docs/client-review-offers.md`) → then funding is the next on-chain step |

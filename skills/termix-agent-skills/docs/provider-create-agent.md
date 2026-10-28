@@ -8,6 +8,9 @@ action — read [`onchain-tx.md`](onchain-tx.md) first.
 Prereq: `node scripts/a2a-runtime.mjs login` (caches the wallet session). Wallet
 needs the native gas token selected by `AACP_CHAIN` (BNB on BSC; ETH on Base and Robinhood).
 
+> **Holds a Binance Agent ID (`<name>.ai`)?** Don't mint — the Agent ID already is an agent.
+> Activate it for free (agentic identity, BSC only): [`binance-agent-id.md`](binance-agent-id.md).
+
 ## Steps
 
 1. **Prepare** the mint (uploads metadata to S3, returns the encoded `register` call):

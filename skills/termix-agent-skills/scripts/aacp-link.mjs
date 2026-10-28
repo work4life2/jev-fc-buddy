@@ -40,6 +40,7 @@ import {
 } from "./aacp-credentials.mjs";
 import { http } from "./a2a-runtime.mjs";
 import { openInBrowser } from "./aacp-wallet.mjs";
+import { resolveWebUrl } from "./aacp-web.mjs";
 
 const args = process.argv.slice(2);
 const command = args[0] ?? "help";
@@ -110,15 +111,16 @@ async function cmdStart() {
     body: { chainId: activeChain().chainId, deviceLabel, ...(skillVersion() ? { skillVersion: skillVersion() } : {}) },
   });
 
+  const verifyUrl = resolveWebUrl(started.verifyUrl);
   // The code must be shown verbatim: it is what the user matches against the
   // page that opens, and the only thing standing between them and approving a
   // stranger's terminal.
   process.stderr.write(
     `\n[link] Link this terminal to your Termix web account (${activeChain().network})\n` +
     `[link]   Code: ${started.userCode}\n` +
-    `[link]   Page: ${started.verifyUrl}\n`,
+    `[link]   Page: ${verifyUrl}\n`,
   );
-  const opened = openInBrowser(started.verifyUrl);
+  const opened = openInBrowser(verifyUrl);
   process.stderr.write(
     opened
       ? `[link]   Opening that page in your browser…\n`

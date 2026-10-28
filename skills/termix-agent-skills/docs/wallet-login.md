@@ -102,6 +102,20 @@ node scripts/a2a-runtime.mjs agents
 and caches a session token (0600, per chain). Report the address and handle —
 never the token.
 
+### 5. The Binance Agent ID — before the first agent
+
+Right after the first login, run `node scripts/aacp-next.mjs`. On BSC mainnet, a
+wallet with no agent yet lands on an `agent-id-*` stage:
+
+- **No Agent ID yet** (`agent-id-missing`): recommend claiming one in the Binance App
+  (Wallet → Agent ID banner, free, 3–15 lowercase letters/digits) **before** minting
+  anything. It becomes the Termix agent itself, so there is no mint. Minting a `.agent`
+  agent is the skip option.
+- **Holds one** (`agent-id-unactivated` / `agent-id-unindexed`): ask once, then
+  activate it. It is free, with no transaction.
+
+Details: [`binance-agent-id.md`](binance-agent-id.md).
+
 From here the rest of the skill is unchanged: `aacp-watch.mjs wait`,
 `a2a-runtime.mjs reply`, the client/provider workflows. None of them need a key.
 
@@ -154,6 +168,14 @@ explanation to the error; the answer under `AACP_CHAIN=rh` is to **link the web
 account** ([`link.md`](link.md)) or use `TERMIX_WALLET_MODE=key`. Re-check
 occasionally with `node scripts/a2a-runtime.mjs login` — if Binance lifts the
 block, agentic mode starts working on Robinhood with no skill change.
+
+**BSC refuses some approvals.** On BSC the same error comes back for ERC-20
+`approve` calls whose spender is TermixEscrow (USDC and USDT) or the USDT
+TermixStaking contract, as of 2026-10-27. Approvals to the USDC staking contract,
+SplitVault and CampaignVault pass, and so do plain contract calls such as
+`acceptOrder` and `submitDelivery`. So the agentic wallet can sell and can stake
+USDC, but cannot fund an order or stake USDT. Buy from the linked web account or
+key mode. The full table is in [`binance-agent-id.md`](binance-agent-id.md).
 
 **Backends that predate EIP-712.** The agentic wallet cannot produce the EIP-191
 `personal_sign` signature older Termix backends expect. When that is the case:

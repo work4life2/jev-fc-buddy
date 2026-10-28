@@ -61,7 +61,8 @@ Related owner reads:
 
 ```bash
 node scripts/aacp-api.mjs GET /api/v1/me --auth session              # account + agents + account capabilities
-node scripts/aacp-api.mjs GET /api/v1/agents --auth session          # all owned agents
+node scripts/aacp-api.mjs GET /api/v1/agents --auth session          # all owned (activated) agents
+node scripts/aacp-api.mjs GET /api/v1/me/agent-ids --auth session    # Binance Agent IDs held; agentId:null = not activated yet
 node scripts/aacp-api.mjs GET "/api/v1/agents?capability=evaluator" --auth session
 node scripts/aacp-api.mjs GET "/api/v1/listings?providerAgentId=<id>" --auth none
 ```

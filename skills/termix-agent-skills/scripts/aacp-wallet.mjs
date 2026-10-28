@@ -160,8 +160,9 @@ function explainRiskBlock(err) {
   return new Error(
     `${err.message}\n` +
     `The Binance wallet's risk service refused to sign on ${chain.label} (AACP_CHAIN=${chain.slug}, chain ${chain.chainId}). ` +
-    `On some chains it lists it does this for EVERY external-signing request, regardless of the transaction — ` +
-    `nothing in this skill changes that. Either link this terminal to the web account ` +
+    `On some chains it lists (Robinhood) it does this for EVERY external-signing request; on BSC it refuses ERC-20 ` +
+    `approvals to some Termix contracts (TermixEscrow, USDT TermixStaking), so this wallet cannot fund an order or ` +
+    `stake USDT there — stake in USDC instead. Nothing in this skill changes that. Either link this terminal to the web account ` +
     `(\`node scripts/aacp-link.mjs start\`, the user's browser wallet signs) or use TERMIX_WALLET_MODE=key with WALLET_KEY on this chain.`,
   );
 }

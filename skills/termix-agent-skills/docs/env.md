@@ -24,7 +24,7 @@ export AACP_CHAIN=base     # default: bsc — or rh for Robinhood Chain
 | Network | BSC Mainnet | Base Mainnet | Robinhood Mainnet |
 | Chain ID | `56` | `8453` | `4663` |
 | API base | `https://platform-backend.prod.termix.live` | `https://platform-backend-base.prod.termix.live` | `https://platform-backend-rh.prod.termix.live` |
-| RPC URL | `https://bsc-rpc.publicnode.com` | `https://base-rpc.publicnode.com` | `https://rpc.mainnet.chain.robinhood.com` |
+| RPC URL | `https://bsc-dataseed.bnbchain.org` | `https://base-rpc.publicnode.com` | `https://rpc.mainnet.chain.robinhood.com` |
 | Block explorer | `https://bscscan.com` | `https://basescan.org` | `https://explorer.mainnet.chain.robinhood.com` |
 | Gas token | BNB | ETH | ETH |
 | Quant vertical | available | **not available** | **not available** |
@@ -59,6 +59,13 @@ node scripts/a2a-runtime.mjs print-env
 ```
 
 ### Overrides
+
+`AACP_WEB_URL` optionally overrides the website origin used for account linking,
+message signing and transaction signing. It must be an http(s) origin, without a
+path or query. Chain paths and request identifiers from the backend are preserved.
+The dev release pins its test website automatically; production/local releases use
+the backend-provided website unless this override is set. This changes navigation
+only, never the backend-stamped message domain or cached encryption keys.
 
 `AACP_CHAIN` sets sensible defaults; these override one piece each, for
 self-hosted deployments and private nodes:

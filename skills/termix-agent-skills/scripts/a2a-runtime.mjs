@@ -628,11 +628,31 @@ async function cmdAgents() {
     }
     throw err;
   });
-  const items = (res.items ?? []).map((a) => ({
+  // A Binance Agent ID this wallet holds is an agent too, but only once activated —
+  // until then it is not in /agents. Only the skill's own wallet can hold one.
+  const ids = activeIdentity() === "linked"
+    ? null
+    : await http("GET", "/api/v1/me/agent-ids", { token: session }).catch(() => null);
+  console.log(JSON.stringify(agentsReport(res.items ?? [], ids?.items ?? []), null, 2));
+}
+
+export function agentsReport(agents, heldIds) {
+  const items = agents.map((a) => ({
     agentId: a.id,
     agentTokenId: a.agentTokenId,
     name: a.name,
     a2aStatus: a.a2aStatus,
+  }));
+  const unactivated = heldIds.filter((x) => !x.agentId).map((x) => ({
+    provider: x.provider,
+    name: x.displayName ?? null,
+    tokenId: x.tokenId ?? null,
+    unindexed: Boolean(x.unindexed),
+  }));
+  const activateSteps = unactivated.map((x) => ({
+    do: x.name ? `Activate the Binance Agent ID ${x.name} as an agent (free, no gas)` : "Activate the held Binance Agent ID as an agent — ask the user for its .ai name",
+    command: `node scripts/aacp-api.mjs POST /api/v1/agents/activate --auth session --body '{"provider":"${x.provider}","name":"${x.name ? x.name.replace(/\.ai$/, "") : "<name, without .ai>"}"}'`,
+    doc: "docs/binance-agent-id.md",
   }));
   // Zero agents is not an empty list, it is a blocked step: every action on
   // Termix — client side included — is taken as an owned agent.
@@ -641,16 +661,21 @@ async function cmdAgents() {
         { do: "Host one online so it answers buyers", command: `node scripts/aacp-watch.mjs wait --agent ${items[0].agentId}`, doc: "docs/watch.md" },
         { do: "Publish a listing for it (seller)", command: `node scripts/aacp-api.mjs GET "/api/v1/agents/${items[0].agentId}/services" --auth none`, doc: "docs/provider-listing.md" },
         { do: "Publish a request as this agent (buyer)", command: "node scripts/aacp-api.mjs GET /api/v1/prepayment-orders --auth session", doc: "docs/client-publish-brief.md" },
+        ...activateSteps,
       ]
-    : [{ do: "Create (mint) your first agent", command: "node scripts/aacp-api.mjs GET /api/v1/config/contracts --auth none", doc: "docs/provider-create-agent.md" }];
-  console.log(JSON.stringify({
+    : [...activateSteps, { do: "Create (mint) your first agent", command: "node scripts/aacp-api.mjs GET /api/v1/config/contracts --auth none", doc: "docs/provider-create-agent.md" }];
+  const heldNote = unactivated.length
+    ? ` This wallet also holds ${unactivated.length === 1 ? "a Binance Agent ID" : `${unactivated.length} Binance Agent IDs`} not activated yet (\`unactivated\`) — list ${unactivated.length === 1 ? "it" : "them"} too and offer activation; ask first.`
+    : "";
+  return {
     count: items.length,
     items,
+    ...(unactivated.length ? { unactivated } : {}),
     nextSteps,
-    tellUser: items.length
+    tellUser: (items.length
       ? "Show the agents as a short numbered list, ask which one to use, then offer the steps above."
-      : "This wallet owns no agent yet — offer to mint one before anything else.",
-  }, null, 2));
+      : "This wallet owns no agent yet — offer to activate or mint one before anything else.") + heldNote,
+  };
 }
 
 function autoreplyPidFile(agentId) { return `/tmp/termix-autoreply-${agentId}.pid`; }

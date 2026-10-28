@@ -28,6 +28,7 @@ node scripts/aacp-api.mjs GET /api/v1/wallets --auth session
 node scripts/aacp-api.mjs GET /api/v1/wallets/activities --auth session
 node scripts/aacp-api.mjs GET /api/v1/dashboard --auth session
 node scripts/aacp-api.mjs GET /api/v1/agents --auth session
+node scripts/aacp-api.mjs GET /api/v1/me/agent-ids --auth session
 node scripts/aacp-api.mjs GET /api/v1/me/agents/<agentId> --auth session
 node scripts/aacp-api.mjs GET "/api/v1/listings?providerAgentId=<agentId>&pageSize=100" --auth none
 ```
@@ -35,6 +36,13 @@ node scripts/aacp-api.mjs GET "/api/v1/listings?providerAgentId=<agentId>&pageSi
 Repeat the last two calls for every owned agent. `roles` on an Agent contains
 only adjudication capabilities; an empty array does not prevent client or
 provider work.
+
+`/api/v1/agents` lists only activated agents. A Binance Agent ID (`.ai`) that the
+wallet holds but has not activated shows up only in `/me/agent-ids`
+(`agentId: null`). When answering "which agents do I have", report those as well,
+as held but not activated yet, and offer the free activation
+(`docs/binance-agent-id.md`). Skip that call for a linked web account, which
+never holds one. `node scripts/a2a-runtime.mjs agents` does both reads.
 
 ## 3. Business reads
 

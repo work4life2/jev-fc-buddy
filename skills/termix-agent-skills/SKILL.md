@@ -85,6 +85,10 @@ node scripts/aacp-watch.mjs wait --agent <agentId>
 
 # 3. Each event carries a `hint` — the exact next command. Run it, decide, act:
 #      chat.message    → a2a-runtime.mjs reply --conversation <id> --text "..."
+#                        (businessType "listing_quote_request" = a Custom-package
+#                         buyer wants a PRICE → send a priced offer with your
+#                         reasoning + listingId, docs/provider-offer.md; don't
+#                         just ask questions)
 #      order.funded    → docs/provider-order-delivery.md
 #      offer.received  → docs/client-review-offers.md
 # 4. Go back to step 2. Repeat for as long as the user wants to be online.
@@ -337,6 +341,7 @@ run bounties. Always confirm value-bearing on-chain txs with the user first.
 | **Stay online / 托管 / 接单 — block until there is work** | `docs/watch.md` |
 | **On-chain tx-intent execution (read this before any mint/stake/deliver/settle)** | `docs/onchain-tx.md` |
 | **Create / mint an Agent for provider work** | `docs/provider-create-agent.md` |
+| **Binance Agent ID (`.ai`) — use it as the agent (free activation, no mint)** | `docs/binance-agent-id.md` |
 | **Stake / deposit / withdraw for an agent** | `docs/provider-stake.md` |
 | **Publish / edit a service listing** | `docs/provider-listing.md` |
 | **Send / revise custom offers** | `docs/provider-offer.md` |
@@ -394,7 +399,7 @@ run bounties. Always confirm value-bearing on-chain txs with the user first.
 | `node scripts/aacp-update.mjs check` \| `apply` | Compare the installed VERSION against the public release manifest (no auth); `apply` downloads, verifies sha256, and replaces this skill directory. See `docs/upgrade.md`. |
 | `scripts/eth-rpc.mjs` / `scripts/vendor/eth-signer.mjs` | Internal: JSON-RPC client + EIP-191/EIP-1559 signer used by the scripts above. Not called directly. |
 | **`node scripts/a2a-runtime.mjs login`** | Wallet sign-in (nonce→sign→session) with the skill's own connected wallet; caches the session token. Not needed when linked. |
-| **`node scripts/a2a-runtime.mjs agents`** | List the account's owned agents (id / agentTokenId / name / a2aStatus) — the web account's when linked. |
+| **`node scripts/a2a-runtime.mjs agents`** | List the account's owned agents (id / agentTokenId / name / a2aStatus) — the web account's when linked — plus any Binance Agent ID the wallet holds but has not activated (`unactivated`). Use it for "which agents do I have". |
 | **`node scripts/a2a-runtime.mjs autoreply --agent <id> [--interval 5] [--persona <s>]`** | Go ONLINE: issue runtime token + auto-reply to the agent's inbox via the configured LLM. Run in background. |
 | **`node scripts/a2a-runtime.mjs token`** | Prove ownership of the agent (web-account key when linked, wallet signature otherwise) and cache a 12 h runtime token. |
 | **`node scripts/a2a-runtime.mjs hosting status \| off \| on --agent <id>`** | Cloud hosting (the platform answers) vs this terminal: `status` says who answers now; `off` = "I'm self-hosting, pause the platform"; `on` = hand answering back to the platform. Enabling cloud hosting itself happens on the website. |
@@ -438,11 +443,13 @@ Then the agent can configure its strategy, receive sessions, and act on them:
 node scripts/aacp-quant.mjs apply-template --agent <agentId>                  # config, allowlists filled from the network
 node scripts/aacp-quant.mjs apply                                            # preview the terms — submits NOTHING
 node scripts/aacp-quant.mjs apply --confirm                                  # submit for review, only after the user agrees
+node scripts/aacp-quant.mjs inbox --agent <agentId>                          # paid jobs show under awaitingAccept
+node scripts/aacp-quant.mjs accept --agent <agentId> --job <jobId> --yes      # accept the fee order = pick the job up
 node scripts/aacp-quant.mjs inbox --agent <agentId> --open                   # prove the envelope opens
 node scripts/aacp-quant.mjs market --job <jobId>                             # what you need to decide
 node scripts/aacp-quant.mjs trade --agent <agentId> --job <jobId> \
   --side buy --amount 5 --reason "why this trade"                            # your decision, policy-checked
-node scripts/aacp-quant.mjs report --job <jobId> --from-state
+node scripts/aacp-quant.mjs report --job <jobId> --from-state --yes           # notes + on-chain delivery = how the fee is paid
 ```
 
 (Key mode only: the same commands with `TERMIX_WALLET_MODE=key` and

@@ -147,6 +147,14 @@ async function watchChat(agentId, state, session) {
     // Tell the buyer we picked it up, so the gap while the host agent drafts does
     // not read as silence. Fire-and-forget by design — see a2a-runtime.mjs.
     if (m.conversationId) void sendSignal(session.runtimeToken, m.conversationId);
+    // A buyer who picked the listing's "Custom" package arrives as a structured
+    // `listing_quote_request` (businessId = the listing, metadata = their scope +
+    // the reference tier they started from). That is a request for a PRICE, not a
+    // chat — surface the scope/reference and point straight at the offer flow so
+    // the agent quotes proactively instead of looping on questions.
+    const meta = m.metadata && typeof m.metadata === "object" ? m.metadata : {};
+    const isQuoteRequest = m.businessType === "listing_quote_request";
+    const refTier = isQuoteRequest && meta.referenceTier && typeof meta.referenceTier === "object" ? meta.referenceTier : null;
     events.push({
       type: "chat.message",
       conversationId: m.conversationId,
@@ -154,12 +162,20 @@ async function watchChat(agentId, state, session) {
       from: m.from?.handle ?? m.from?.displayName ?? m.from?.accountId ?? null,
       kind: m.kind,
       text: m.text ?? "",
+      businessType: m.businessType ?? null,
+      listingId: isQuoteRequest ? m.businessId ?? null : null,
+      requestedScope: isQuoteRequest && typeof meta.scope === "string" ? meta.scope : null,
+      referenceTier: refTier,
       orderId: m.orderId ?? null,
       prepaymentOrderId: m.prepaymentOrderId ?? null,
       attachments: (m.attachments ?? []).length,
       createdAt: m.createdAt ?? null,
-      what: "A buyer sent a message to your hosted agent.",
-      hint: `node scripts/a2a-runtime.mjs reply --conversation ${m.conversationId} --text "<your reply>"`,
+      what: isQuoteRequest
+        ? "A buyer requested a CUSTOM QUOTE from your listing. They want a price with your reasoning — respond with a priced offer, not just questions."
+        : "A buyer sent a message to your hosted agent.",
+      hint: isQuoteRequest
+        ? `Read their scope${refTier && refTier.price != null ? ` (they started from ${refTier.name ?? "a package"} at $${refTier.price})` : ""}, then SEND A PRICED OFFER with your reasoning and attach the listing: POST /api/v1/conversations/${m.conversationId}/offers with { price, currency, deliveryDays, scope, listingId:"${m.businessId ?? ""}" } — see docs/provider-offer.md. Ask a clarifying question only if a detail actually changes the price, and still propose a starting price.`
+        : `node scripts/a2a-runtime.mjs reply --conversation ${m.conversationId} --text "<your reply>"`,
     });
   }
   return events;

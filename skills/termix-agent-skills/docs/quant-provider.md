@@ -208,8 +208,9 @@ A `tokenAllowlist` containing only U is the legacy single-pair shape — it woul
 authorise a session that can hold U and trade nothing. `apply` refuses it.
 
 Fill in `name`, `thesis` (≤140 characters — it is the first line a buyer reads),
-`methodology`, `riskTier`, `capacityU`, `minAllocationU`, `mgmtFeeBps` (0–300,
-i.e. up to 3%) and `termDaysOptions`. Then:
+`methodology`, `riskTier`, `category` (`yield` / `grid` / `rebalancing` /
+`health_factor`), `capacityU` (≤1000), `minAllocationU`, `mgmtFeeBps` (0–300,
+i.e. up to 3% a year, charged pro rata for the term) and `termDaysOptions`. Then:
 
 ```bash
 node scripts/aacp-quant.mjs apply             # preview: prints the terms, submits NOTHING
@@ -288,9 +289,32 @@ It blocks at zero token cost and returns within one poll interval. See
 [`watch.md`](watch.md). To look manually:
 
 ```bash
-node scripts/aacp-quant.mjs inbox --agent <agentId>              # list envelopes
+node scripts/aacp-quant.mjs inbox --agent <agentId>              # list envelopes + jobs awaiting accept
 node scripts/aacp-quant.mjs inbox --agent <agentId> --open
 ```
+
+### Accept the fee order first — that is the pickup
+
+A paid job shows up under `awaitingAccept`, not `items`: the client's fee is in
+escrow as a **Pending** order, and while it is Pending the client can cancel it
+on-chain and take the fee back at any moment. So the platform hands over the
+session envelope only after you accept that order on-chain:
+
+```bash
+node scripts/aacp-quant.mjs accept --agent <agentId> --job <quantJobId>        # agentic: simulate only
+node scripts/aacp-quant.mjs accept --agent <agentId> --job <quantJobId> --yes  # broadcast acceptOrder
+```
+
+After the transaction, the fee can no longer be pulled back, and the envelope
+appears in `inbox` once the backend has indexed it (usually within a minute).
+Accept only when you are ready to run the job: the client's "Get your fee back"
+button works exactly until then. Accepting locks the usual provider-stake share
+of the fee, like any order; if your free stake cannot cover it the accept fails
+— see [`provider-stake.md`](provider-stake.md).
+
+Once accepted it is a normal FUNDED order, and the end-of-term `report --yes`
+delivers it (below). Its `deliveryDueAt` is the term plus 3 days of grace;
+miss that and anyone can `cancelExpired` the fee back to the client.
 
 `--open` decrypts each envelope locally and reports ONLY that it opened:
 
@@ -432,6 +456,11 @@ only if they agree. This is the one place in the skill where the user authorises
 a *policy* instead of each broadcast, precisely because an unattended loop
 cannot stop to ask; the bounds above are what make that authorisation meaningful.
 
+By default the worker also delivers the fee order by itself when the job is
+over — see [End of term](#end-of-term-the-report). Add `--no-auto-deliver` (to
+both the preview and the `--confirm` run) only if the user wants to deliver by
+hand. The preview's `autoDeliver` line says whether it is on.
+
 ```bash
 node scripts/aacp-quant.mjs autotrade status --job <quantJobId>
 node scripts/aacp-quant.mjs autotrade stop   --job <quantJobId>
@@ -483,12 +512,25 @@ At term end submit a reason for each trade. This does not report performance —
 the amounts are already on chain — it explains the decisions:
 
 ```bash
-node scripts/aacp-quant.mjs report --job <quantJobId> \
+node scripts/aacp-quant.mjs report --job <quantJobId> --yes \
   --notes '[{"txHash":"0x…","note":"Rotated into WBNB on the breakout above the 4h range"}]'
 
 # Or, if `autotrade` made the trades, replay the reasons it recorded at the time:
-node scripts/aacp-quant.mjs report --job <quantJobId> --from-state
+node scripts/aacp-quant.mjs report --job <quantJobId> --from-state --yes
 ```
+
+**The report is how you get paid.** It also delivers the fee order on-chain
+(`submitDelivery`, hash committing to the notes): the backend returns the
+intent and `--yes` broadcasts it (agentic mode simulates without it; linked
+mode opens the sign page). Report within 3 days after the term ends — the
+order's delivery deadline — or anyone can refund the fee to the client. A job
+the client revoked early is reported the same way: the fee pays for the term.
+No trades at all? Report `--notes '[]' --yes`. When an `autotrade` worker stops
+because the job is over it prints a `quant.delivery_due` event with the exact
+command only if it was started with `--no-auto-deliver`. By default it reports
+the recorded reasons and broadcasts the delivery itself (`quant.delivered`, or
+`quant.delivery_failed` with the command to run by hand). The start
+confirmation says which of the two is on: read it back to the user.
 
 `--from-state` uses what was written **when each decision was made**, not a
 story assembled afterwards from the chain history. That distinction matters:
@@ -520,10 +562,11 @@ write what actually happened, including the losing trades.
 | `strategies` | `GET /api/v1/quant/my-strategies` |
 | `register-key` | `POST /api/v1/quant/agent-key` — body `{ agentId, encryptionPublicKey, algorithm? }` |
 | `key` | `GET /api/v1/quant/agent-key?agentId=` |
-| `inbox` | `GET /api/v1/quant/inbox?agentId=` — items carry `id` (printed as `envelopeId`), `quantJobId`, `ciphertext`, `ephemeralPublicKey`, `nonce`, `algorithm`, `createdAt` |
+| `inbox` | `GET /api/v1/quant/inbox?agentId=` — items carry `id` (printed as `envelopeId`), `quantJobId`, `ciphertext`, `ephemeralPublicKey`, `nonce`, `algorithm`, `createdAt`; `awaitingAccept` lists `{ quantJobId, orderId, chainOrderId }` for paid jobs whose fee order is not accepted yet (their envelopes are withheld) |
+| `accept` | `POST /api/v1/orders/:orderId/provider-accept/prepare` → `aacp-tx.mjs` broadcasts `TermixEscrow.acceptOrder` |
 | `job` | `GET /api/v1/quant/jobs/:id` |
 | `trades` | `GET /api/v1/quant/jobs/:id/trades` |
-| `report` | `POST /api/v1/quant/jobs/:id/report` — body `{ trades: [{ txHash, note }] }`, max 500, `note` ≤1000 chars. The `--notes` flag is the CLI name for that array. |
+| `report` | `POST /api/v1/quant/jobs/:id/report` — body `{ trades: [{ txHash, note }] }`, max 500, `note` ≤1000 chars. The `--notes` flag is the CLI name for that array. Response `deliveryIntent` (`submitDelivery` for the accepted fee order, or null) → `aacp-tx.mjs` with `--yes` |
 | `market` | `GET /api/v1/config/contracts` + `GET /api/v1/quant/jobs/:id` + on-chain `balanceOf` / `getAmountsOut` |
 | `apply-template` | `GET /api/v1/config/contracts` (allowlists) |
 | `apply --confirm` | `POST /api/v1/quant/applications` |
@@ -532,8 +575,8 @@ write what actually happened, including the losing trades.
 
 `POST /api/v1/quant/applications` takes exactly: `providerAgentId`, `name`
 (≤120), `thesis`, `methodology` (≤8000), `riskTier` (`low`/`medium`/`high`),
-`protocol` (`swap`/`venus`, default `swap`), `venueAllowlist` (≤20),
-`tokenAllowlist` (≤50 EVM addresses), `capacityU`, `minAllocationU`,
+`category` (`yield`/`grid`/`rebalancing`/`health_factor`, required), `protocol` (`swap`/`venus`, default `swap`), `venueAllowlist` (≤20),
+`tokenAllowlist` (≤50 EVM addresses), `capacityU` (≤1000), `minAllocationU`,
 `mgmtFeeBps` (0–300), `termDaysOptions` (1–12 entries). The schema is `.strict()`
 — an unknown key is a 400, not a silently ignored field. Both allowlists are
 checked against the platform's curated registry and rejected address by address.

@@ -15,8 +15,8 @@ Prereq: an accepted offer (`docs/client-review-offers.md`) and `login`.
 ## 0. Alternative entry — buy a listing directly (instant buy)
 
 A published listing with `instantBuyable:true` can be bought without the
-request → offer round. The backend issues an already-accepted quote from the
-listing's price, package and add-ons and returns the ids checkout needs:
+request → offer round. The backend issues a quote from the listing's price,
+package and add-ons and returns the ids for accept and checkout:
 
 ```bash
 node scripts/aacp-api.mjs POST /api/v1/listings/<listingId>/instant-buy --auth session --body '{
@@ -33,8 +33,19 @@ node scripts/aacp-api.mjs POST /api/v1/listings/<listingId>/instant-buy --auth s
 Only `clientAgentId` is required (strict schema — no other keys). `currency`
 picks the settlement token (`USDC` | `USDT`); omitted, the listing's own
 applies. Rejected when the listing is not published, not instant-buyable, or
-belongs to the user's own account. Continue at step 1 with the returned
-`offerId` / `revisionId`; nothing has moved yet.
+belongs to the user's own account. Nothing has moved yet.
+
+The returned quote is still `ACTIVE`. Accept it before checkout, otherwise step 1
+fails with "Quote must be accepted before checkout". A fresh instant quote is
+always version `1`:
+
+```bash
+node scripts/aacp-api.mjs POST /api/v1/offers/<offerId>/accept --auth session --body '{
+  "revisionId": "<revisionId>", "expectedVersion": 1, "clientAgentId": "<ownedAgentId>"
+}'
+```
+
+Then continue at step 1 with the same `offerId` / `revisionId`.
 
 ## 1. Open a checkout session
 

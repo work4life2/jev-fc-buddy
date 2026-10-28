@@ -146,6 +146,28 @@ async function probeAgents(session) {
   }
 }
 
+// Binance Agent IDs (`.ai`, SPACE ID) the signed-in wallet holds, and whether each
+// is already this account's agent. An Agent ID IS an AACP agent (the contracts
+// resolve it through AgentIdentityRouter), so using one is an off-chain activation,
+// not a mint. Only the skill's own wallet can hold one — a linked web wallet never
+// does, so it is not probed.
+//
+// `available` is false where no Agent ID registry exists (testnet / Base / RH) —
+// never send those users to the Binance App. `unindexed` items are IDs the chain
+// says the wallet holds but the backend has not projected yet (name unknown).
+async function probeExternalIds(session, link) {
+  if (!session.loggedIn || OFFLINE || link.identity === "linked") return null;
+  try {
+    const res = await http("GET", "/api/v1/me/agent-ids", { token: loadSessionToken() });
+    return {
+      available: res.available !== false,
+      items: (res.items ?? []).map((x) => ({ provider: x.provider, name: x.name, displayName: x.displayName, tokenId: x.tokenId, agentId: x.agentId, unindexed: Boolean(x.unindexed) })),
+    };
+  } catch (err) {
+    return { error: err.message };
+  }
+}
+
 // What is already waiting for a decision. This is what turns a generic menu
 // ("you could publish a request…") into the one thing that actually matters
 // right now ("a buyer funded an order — it needs delivering").
@@ -270,7 +292,7 @@ function walletBlocker(wallet) {
   return null;
 }
 
-function planFor({ wallet, session, agents, work, link = { identity: "agentic", linked: false } }) {
+function planFor({ wallet, session, agents, work, externalIds, link = { identity: "agentic", linked: false } }) {
   const linked = link.identity === "linked";
 
   // A linked terminal whose key the backend no longer accepts (expired, or
@@ -332,6 +354,63 @@ function planFor({ wallet, session, agents, work, link = { identity: "agentic", 
     : null;
   const withPrefix = (summary) => (linked ? `Linked to the web account${session.handle ? ` @${session.handle}` : ""}. ${summary}` : summary);
 
+  const idItems = Array.isArray(externalIds?.items) ? externalIds.items : [];
+  const idleIds = idItems.filter((x) => !x.agentId && !x.unindexed);
+  const unindexedId = idItems.find((x) => x.unindexed);
+  const activateStep = (x) => ({
+    do: `Use your Binance Agent ID ${x.displayName} as your agent`,
+    why: `${x.displayName} itself becomes your Termix agent — buyers find it by that name and payouts go to this wallet. No transaction, no gas: it only creates the profile.`,
+    command: `node scripts/aacp-api.mjs POST /api/v1/agents/activate --body '{"provider":"${x.provider}","name":"${x.name ?? ""}"${x.name ? "" : `,"tokenId":"${x.tokenId}"`}}'`,
+    doc: "docs/binance-agent-id.md",
+  });
+  const activateByNameStep = (x) => ({
+    do: "Use your Binance Agent ID as your agent — ask the user for its .ai name",
+    why: "The chain shows this wallet holds an Agent ID that Termix has not indexed yet (it was just claimed, or indexing is catching up). With its name it can be activated right now — free, no transaction.",
+    command: `node scripts/aacp-api.mjs POST /api/v1/agents/activate --body '{"provider":"${x.provider}","name":"<name, without .ai>"}'`,
+    doc: "docs/binance-agent-id.md",
+  });
+  const MINT_INSTEAD = {
+    do: "Or skip it and mint an ERC-8004 agent instead",
+    why: "Works without an Agent ID; the agent gets a <name>.agent handle. Costs one gas fee.",
+    command: "node scripts/aacp-api.mjs GET /api/v1/config/contracts --auth none",
+    doc: "docs/provider-create-agent.md",
+  };
+
+  // Binance Agentic Wallet, no agent yet: the Agent ID comes FIRST. It is free, it
+  // is the user's identity in the Binance ecosystem, and on Termix it IS the agent
+  // (no mint) — so lead with claiming / activating it before anything else.
+  if (agents && !agents.error && agents.count === 0 && !linked) {
+    if (idleIds[0]) {
+      return {
+        stage: "agent-id-unactivated",
+        summary: `Signed in. This wallet holds the Binance Agent ID ${idleIds[0].displayName} — it can be your Termix agent right away.`,
+        steps: [activateStep(idleIds[0]), MINT_INSTEAD, BROWSE_STEP],
+        warning: walletWarning ?? identityNote,
+      };
+    }
+    if (unindexedId) {
+      return {
+        stage: "agent-id-unindexed",
+        summary: "Signed in. This wallet holds a Binance Agent ID that Termix has not indexed yet.",
+        steps: [activateByNameStep(unindexedId), MINT_INSTEAD, BROWSE_STEP],
+        warning: walletWarning ?? identityNote,
+      };
+    }
+    if (wallet.mode === "agentic" && externalIds?.available && !externalIds.error && idItems.length === 0) {
+      return {
+        stage: "agent-id-missing",
+        summary: "Signed in with a Binance Agentic Wallet that has no Binance Agent ID yet. Claim one first — it becomes your Termix agent.",
+        steps: [{
+          do: "Claim a free Binance Agent ID (.ai) in the Binance App, then come back",
+          why: "Binance App → Wallet → the Agent ID banner → pick a name (3–15 lowercase letters/digits). It is free, it is your agent's name across the Binance ecosystem, and on Termix it is your agent directly — no mint. Re-run this check once it is claimed.",
+          command: "node scripts/aacp-next.mjs",
+          doc: "docs/binance-agent-id.md",
+        }, MINT_INSTEAD, BROWSE_STEP],
+        warning: walletWarning ?? identityNote,
+      };
+    }
+  }
+
   // Then an agent to act as. Both sides need one: publishing a request, accepting
   // an offer and checkout all carry a `clientAgentId`, and hosting obviously does.
   if (agents && !agents.error && agents.count === 0) {
@@ -370,6 +449,8 @@ function planFor({ wallet, session, agents, work, link = { identity: "agentic", 
       doc: "docs/client-review-offers.md",
     });
   }
+  if (idleIds[0]) steps.push(activateStep(idleIds[0]));
+  else if (unindexedId) steps.push(activateByNameStep(unindexedId));
   steps.push({
     do: "Publish a request — pay someone to do work (client side)",
     why: "Describe the job and a budget; providers come to you with quotes.",
@@ -418,8 +499,8 @@ async function main() {
   const link = probeLink();
   const wallet = await probeWallet(link);
   const session = await probeSession(link);
-  const [agents, work] = await Promise.all([probeAgents(session), probeWork(session)]);
-  const plan = planFor({ wallet, session, agents, work, link });
+  const [agents, work, externalIds] = await Promise.all([probeAgents(session), probeWork(session), probeExternalIds(session, link)]);
+  const plan = planFor({ wallet, session, agents, work, externalIds, link });
 
   console.log(JSON.stringify({
     skillVersion: installedVersion(),
@@ -430,6 +511,7 @@ async function main() {
     session,
     agents,
     work,
+    ...(externalIds ? { externalIds } : {}),
     hostedAgentTokenCached: Boolean(loadCachedToken()),
     stage: plan.stage,
     summary: plan.summary,

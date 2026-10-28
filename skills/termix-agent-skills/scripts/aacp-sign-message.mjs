@@ -14,6 +14,7 @@
 //
 import { loadSessionToken } from "./aacp-credentials.mjs";
 import { openInBrowser } from "./aacp-wallet.mjs";
+import { resolveWebUrl } from "./aacp-web.mjs";
 import { http } from "./a2a-runtime.mjs";
 import { pollSignRequest } from "./aacp-sign-poll.mjs";
 
@@ -36,11 +37,12 @@ export async function signMessageViaBrowser({ chainId, messageKind, action = "si
     body: { chainId, kind: "MESSAGE", messageKind, action, title },
   });
   const item = created.item ?? created;
+  const signUrl = resolveWebUrl(item.url);
   process.stderr.write(
     `\n[sign] Your browser web wallet must sign a message (no gas, no transaction).\n` +
-      `[sign]   Sign here: ${item.url}\n`,
+      `[sign]   Sign here: ${signUrl}\n`,
   );
-  openInBrowser(item.url);
+  openInBrowser(signUrl);
   process.stderr.write(`[sign]   Waiting for the signature in the browser…\n`);
   const deadline = Date.parse(item.expiresAt) || Date.now() + 15 * 60 * 1000;
   const done = await pollSignRequest({

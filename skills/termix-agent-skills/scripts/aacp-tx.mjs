@@ -50,6 +50,7 @@ import { activeChain, activeChainSlug } from "./aacp-chain.mjs";
 import { activeIdentity, isLinkExpiredError, loadLink } from "./aacp-credentials.mjs";
 import { http } from "./a2a-runtime.mjs";
 import { agenticAddress, executeTx, openInBrowser, previewTx, walletMode } from "./aacp-wallet.mjs";
+import { resolveWebUrl } from "./aacp-web.mjs";
 
 const args = process.argv.slice(2);
 function arg(name) {
@@ -231,12 +232,13 @@ async function runLinked(intents, { noWait, context }) {
     throw err;
   }
   const req = created.item ?? created;
+  const signUrl = resolveWebUrl(req.url);
 
   process.stderr.write(
     `\n[sign] ${actions.join(" + ")} needs the user's web wallet.\n` +
-    `[sign]   Sign here: ${req.url}\n`,
+    `[sign]   Sign here: ${signUrl}\n`,
   );
-  const opened = openInBrowser(req.url);
+  const opened = openInBrowser(signUrl);
   process.stderr.write(
     opened
       ? `[sign]   Opening that page in your browser…\n`
@@ -270,7 +272,7 @@ async function runLinked(intents, { noWait, context }) {
         if (Date.now() - lastTick >= 10_000) {
           lastTick = Date.now();
           const done = (pending.txHashes ?? []).length;
-          process.stderr.write(`[sign]   still waiting for the signature in the browser... ${done ? `(${done}/${intents.length} sent) ` : ""}${req.url}\n`);
+          process.stderr.write(`[sign]   still waiting for the signature in the browser... ${done ? `(${done}/${intents.length} sent) ` : ""}${signUrl}\n`);
         }
       },
     });
@@ -278,7 +280,7 @@ async function runLinked(intents, { noWait, context }) {
     for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) process.off(signal, onInterrupt);
   }
 
-  const out = { mode: "linked", from: link.wallet, chainId, signRequestId: req.id, url: req.url };
+  const out = { mode: "linked", from: link.wallet, chainId, signRequestId: req.id, url: signUrl };
   if (item.status !== "SUBMITTED" && item.txHashes?.length) {
     console.log(JSON.stringify({ ...out, status: item.status, results: item.txHashes.map((txHash, i) => ({ action: intents[i].action, txHash, status: "submitted", blockNumber: null })) }, null, 2));
     process.stderr.write("[sign] Some transactions were already sent. Check their receipts before retrying.\n");

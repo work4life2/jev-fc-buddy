@@ -15,11 +15,12 @@
 //   node aacp-quant.mjs apply-template --agent <agentId> [--out <file>]
 //   node aacp-quant.mjs apply          [--config <file>] [--confirm]
 //   node aacp-quant.mjs inbox          --agent <agentId> [--open]
+//   node aacp-quant.mjs accept         --agent <agentId> --job <quantJobId> [--yes]
 //   node aacp-quant.mjs job            --job <quantJobId>
 //   node aacp-quant.mjs trades         --job <quantJobId>
 //   node aacp-quant.mjs trade          --job <quantJobId> --agent <agentId> --side buy|sell --amount <human>
-//   node aacp-quant.mjs autotrade      --job <quantJobId> --agent <agentId> <start|once|status|stop> [--dry-run] [--confirm]
-//   node aacp-quant.mjs report         --job <quantJobId> --notes '<json>' | --from-state
+//   node aacp-quant.mjs autotrade      --job <quantJobId> --agent <agentId> <start|once|status|stop> [--dry-run] [--confirm] [--no-auto-deliver]
+//   node aacp-quant.mjs report         --job <quantJobId> --notes '<json>' | --from-state [--yes]
 //
 // Auth — identity order linked › agentic › key (SKILL.md rule 5). Every command
 // uses the active identity's session: the web-account link, else the agentic
@@ -40,7 +41,7 @@ import {
 } from "node:crypto";
 import { openSync } from "node:fs";
 import { createRequire } from "node:module";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
 import { activeChain, assertQuantSupported, resolveApiBaseUrl, resolveRpcUrl } from "./aacp-chain.mjs";
@@ -69,6 +70,7 @@ import {
 
 const args = process.argv.slice(2);
 const cmd = args[0];
+const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
 function arg(name) {
   const i = args.indexOf(`--${name}`);
@@ -410,7 +412,66 @@ async function cmdInbox() {
       return { ...row, opened: false, error: `could not open: ${err instanceof Error ? err.message : String(err)}` };
     }
   });
-  console.log(JSON.stringify({ count: items.length, items }, null, 2));
+  // Funded fee orders this agent has not accepted yet. Their envelopes are
+  // withheld until it does: see cmdAccept.
+  const awaitingAccept = (res.awaitingAccept ?? []).map((a) => ({
+    ...a,
+    next: `node scripts/aacp-quant.mjs accept --agent ${agentId} --job ${a.quantJobId} --yes`,
+  }));
+  console.log(JSON.stringify({ count: items.length, items, awaitingAccept }, null, 2));
+}
+
+// Run aacp-tx.mjs for one intent. stderr (preview/progress) streams to the
+// user; the final JSON on stdout is captured for the tx hash.
+function runTxIntent(intent, { yes, context }) {
+  return new Promise((res, rej) => {
+    const argv = [resolve(SCRIPT_DIR, "aacp-tx.mjs"), "--intent", JSON.stringify(intent), ...(yes ? ["--yes"] : []), ...(context ? ["--context", JSON.stringify(context)] : [])];
+    const child = spawn(process.execPath, argv, { stdio: ["ignore", "pipe", "inherit"], env: process.env });
+    let out = "";
+    child.stdout.on("data", (d) => { out += d.toString(); });
+    child.on("error", rej);
+    child.on("exit", (code) => {
+      let parsed = null;
+      try { parsed = JSON.parse(out.trim()); } catch { /* preview-only or malformed */ }
+      if (code !== 0) return rej(new Error(`aacp-tx.mjs exited ${code}${out.trim() ? `: ${out.trim()}` : ""}`));
+      res(parsed ?? { output: out.trim() });
+    });
+  });
+}
+
+/**
+ * Accept a job's management-fee order on-chain (TermixEscrow.acceptOrder).
+ *
+ * This IS picking the job up. The client's fee sits in escrow as a Pending
+ * order, and while it is Pending the client can cancel it and take the fee
+ * back at any time. So the platform withholds the session envelope until the
+ * order is accepted: after this transaction the fee can no longer be pulled
+ * back, and `inbox` starts returning the envelope once the backend has
+ * indexed it (usually within a minute). Accepting locks the strategy's usual
+ * provider-stake share of the fee, like any other order.
+ */
+async function cmdAccept() {
+  const agentId = requireArg("agent");
+  const jobId = requireArg("job");
+  const res = await api("GET", `/api/v1/quant/inbox?agentId=${encodeURIComponent(agentId)}`);
+  if ((res.items ?? []).some((e) => e.quantJobId === jobId)) {
+    console.log(JSON.stringify({ status: "already-accepted", quantJobId: jobId }, null, 2));
+    return;
+  }
+  const pending = (res.awaitingAccept ?? []).find((a) => a.quantJobId === jobId);
+  if (!pending) {
+    throw new Error(`Job ${jobId} has no fee order waiting for acceptance. The client may not have paid the fee yet, the job may have ended, or the accept is still being indexed — check \`inbox\` again shortly.`);
+  }
+  const intent = await api("POST", `/api/v1/orders/${encodeURIComponent(pending.orderId)}/provider-accept/prepare`, {});
+  const result = await runTxIntent(intent, { yes: args.includes("--yes"), context: { orderId: pending.orderId } });
+  console.log(JSON.stringify({
+    status: args.includes("--yes") || activeIdentity() === "linked" ? "accepted" : "simulated",
+    quantJobId: jobId,
+    orderId: pending.orderId,
+    chainOrderId: pending.chainOrderId,
+    tx: result,
+    next: "Poll `inbox --open` until the envelope appears, then trade.",
+  }, null, 2));
 }
 
 async function cmdJob() {
@@ -459,9 +520,7 @@ async function cmdReport() {
     // reconstructed afterwards, which is the whole point: a note invented at
     // term end from the chain history is a rationalisation, and voters reading
     // it next to the trades can usually tell.
-    const state = loadState(QUANT_STATE_FILE);
-    const recorded = state.jobs?.[id]?.trades ?? [];
-    trades = recorded.filter((t) => t.txHash && t.reason).map((t) => ({ txHash: t.txHash, note: String(t.reason).slice(0, 2000) }));
+    trades = recordedNotes(loadState(QUANT_STATE_FILE), id);
     if (!trades.length) {
       throw new Error(
         `No recorded trade reasons for job ${id} in ${QUANT_STATE_FILE}. ` +
@@ -477,8 +536,40 @@ async function cmdReport() {
     }
   }
   if (!Array.isArray(trades)) throw new Error("--notes must be a JSON array.");
-  const res = await api("POST", `/api/v1/quant/jobs/${encodeURIComponent(id)}/report`, { trades });
-  console.log(JSON.stringify({ status: res.status, notesApplied: res.notesApplied }, null, 2));
+  trades = trades.map((t) => ({ ...t, note: String(t?.note ?? "").slice(0, QUANT_NOTE_MAX) }));
+  console.log(JSON.stringify(await submitReport(id, trades, { yes: args.includes("--yes") }), null, 2));
+}
+
+/**
+ * Post the report, then deliver the fee order on-chain with it.
+ *
+ * The report is the fee order's delivery: once the order was accepted, the
+ * backend answers with a submitDelivery intent whose hash commits to these
+ * notes. Broadcasting it is how the fee gets paid: it opens the client's
+ * challenge window, after which the escrow releases. Skipping it leaves the
+ * order FUNDED until its deadline (the term plus a few days of grace), after
+ * which anyone can cancelExpired it back to the client. Re-reporting the same
+ * notes re-uses the same intent, so retrying is safe.
+ */
+async function submitReport(jobId, trades, { yes }) {
+  const res = await api("POST", `/api/v1/quant/jobs/${encodeURIComponent(jobId)}/report`, { trades });
+  const out = { status: res.status, notesApplied: res.notesApplied, delivery: null };
+  if (!res.deliveryIntent) {
+    out.delivery = "none: the fee order is not accepted, or was already delivered";
+    return out;
+  }
+  const { orderId, ...intent } = res.deliveryIntent;
+  const tx = await runTxIntent(intent, { yes, context: { orderId } });
+  out.delivery = { orderId, broadcast: yes || activeIdentity() === "linked", tx };
+  if (!out.delivery.broadcast) out.next = "Simulated only. Re-run with --yes to deliver the fee order on-chain.";
+  return out;
+}
+
+/** The reasons `autotrade` recorded at decision time, as report notes. */
+function recordedNotes(state, jobId) {
+  return (state.jobs?.[jobId]?.trades ?? [])
+    .filter((t) => t.txHash && t.reason)
+    .map((t) => ({ txHash: t.txHash, note: String(t.reason).slice(0, QUANT_NOTE_MAX) }));
 }
 
 // ── trading ──────────────────────────────────────────────────────────────────
@@ -574,7 +665,12 @@ const COMPTROLLER_ABI = [
 async function serializedSessionForJob(jobId, agentId) {
   const res = await api("GET", `/api/v1/quant/inbox?agentId=${encodeURIComponent(agentId)}`);
   const envelope = (res.items ?? []).find((e) => e.quantJobId === jobId);
-  if (!envelope) throw new Error(`No session envelope for job ${jobId}. The client has not delivered one yet.`);
+  if (!envelope) {
+    if ((res.awaitingAccept ?? []).some((a) => a.quantJobId === jobId)) {
+      throw new Error(`Job ${jobId}'s fee order is not accepted yet, so its session is withheld. Run \`node scripts/aacp-quant.mjs accept --agent ${agentId} --job ${jobId} --yes\` first.`);
+    }
+    throw new Error(`No session envelope for job ${jobId}. The client has not delivered one yet.`);
+  }
   const { priv } = await resolveEncKeypair();
   return openEnvelope(priv, envelope);
 }
@@ -960,6 +1056,8 @@ async function cmdTrade() {
 
 const DEFAULT_STRATEGY_FILE = "agent-mart-quant-strategy.json";
 const QUANT_STATE_FILE = ".agent-mart-quant-state.json";
+// The backend rejects the whole report if any note is longer (validators/api.ts).
+const QUANT_NOTE_MAX = 1000;
 
 const strategyFile = () => {
   const v = arg("config");
@@ -1043,7 +1141,9 @@ async function cmdApplyTemplate() {
     thesis: "",
     methodology: "",
     riskTier: "medium",
-    capacityU: "100000",
+    // One of QUANT_CATEGORIES; the backend requires it.
+    category: "grid",
+    capacityU: "1000",
     minAllocationU: "100",
     mgmtFeeBps: 200,
     termDaysOptions: [30],
@@ -1068,6 +1168,11 @@ async function cmdApplyTemplate() {
   }, null, 2));
 }
 
+// The backend's strategy categories (validators/api.ts quantCategory) and its
+// per-strategy capacity ceiling (services/quant.ts QUANT_MAX_STRATEGY_CAPACITY_U).
+const QUANT_CATEGORIES = ["yield", "grid", "rebalancing", "health_factor"];
+const QUANT_MAX_CAPACITY_U = 1000;
+
 // Mirrors the browser wizard's validation (packages/frontend/app/quant/apply)
 // so a submission from here fails for the same reasons, with the same wording,
 // rather than bouncing off the backend with a schema error.
@@ -1085,16 +1190,20 @@ function validateApplication(raw) {
     thesis: requireText(raw.thesis, "thesis", { max: 140 }),
     methodology: requireText(raw.methodology, "methodology", { max: 8000 }),
     riskTier: requireOneOf(raw.riskTier, "riskTier", ["low", "medium", "high"]),
+    category: requireOneOf(raw.category, "category", QUANT_CATEGORIES),
     venueAllowlist: requireStringArray(raw.venueAllowlist ?? [], "venueAllowlist", { max: 20, maxLength: 120 }),
     // The tokens this strategy TRADES. A list holding only the settlement
     // currency is the legacy single-pair shape: the client's session would be
     // authorised for U and nothing else, so no swap could ever execute.
     // Regenerating the template is the fix, not editing this by hand.
     tokenAllowlist: requireStringArray(raw.tokenAllowlist ?? [], "tokenAllowlist", { max: 50, maxLength: 120 }),
-    capacityU: String(requireNumber(raw.capacityU, "capacityU", { min: 10 })),
+    capacityU: String(requireNumber(raw.capacityU, "capacityU", { min: 10, max: QUANT_MAX_CAPACITY_U })),
     minAllocationU: String(requireNumber(raw.minAllocationU, "minAllocationU", { min: 10 })),
     mgmtFeeBps,
-    termDaysOptions: termDaysOptions.map((d, i) => requireNumber(d, `termDaysOptions[${i}]`, { min: 1, max: 3650, integer: true })),
+    // Whole days, or 0.25 for the 6-hour term (the backend accepts nothing else).
+    termDaysOptions: termDaysOptions.map((d, i) =>
+      Number(d) === 0.25 ? 0.25 : requireNumber(d, `termDaysOptions[${i}]`, { min: 1, max: 3650, integer: true }),
+    ),
   };
 }
 
@@ -1131,10 +1240,11 @@ async function cmdApply() {
   const terms = {
     strategy: body.name,
     riskTier: body.riskTier,
-    managementFee: `${(body.mgmtFeeBps / 100).toFixed(2)}% of the allocation, per term`,
+    category: body.category,
+    managementFee: `${(body.mgmtFeeBps / 100).toFixed(2)}% of the allocation per year, charged pro rata for the term`,
     capacity: `${body.capacityU} U total across all clients`,
     minimumAllocation: `${body.minAllocationU} U per client`,
-    terms: body.termDaysOptions.map((d) => `${d} days`),
+    terms: body.termDaysOptions.map((d) => (d === 0.25 ? "6 hours" : `${d} days`)),
     venue: "PancakeSwap V2 spot only, U ↔ WBNB. No leverage, no shorting.",
   };
 
@@ -1497,6 +1607,22 @@ async function cmdMarket() {
   }, null, 2));
 }
 
+/**
+ * What a stopping worker does about the delivery. By default it reports the
+ * recorded reasons and broadcasts the delivery (without it the provider is never
+ * paid); started with --no-auto-deliver it only prints the command. A failed
+ * delivery prints the command too.
+ */
+async function deliverOnStop(jobId, state, autoDeliver) {
+  const next = `node scripts/aacp-quant.mjs report --job ${jobId} --from-state --yes`;
+  if (!autoDeliver) return { event: "quant.delivery_due", jobId, next };
+  try {
+    return { event: "quant.delivered", jobId, ...(await submitReport(jobId, recordedNotes(state, jobId), { yes: true })) };
+  } catch (err) {
+    return { event: "quant.delivery_failed", jobId, error: err instanceof Error ? err.message : String(err), next };
+  }
+}
+
 async function cmdAutotrade() {
   const jobId = requireArg("job");
   const sub = ["start", "once", "status", "stop"].find((s) => args.includes(s)) ?? "status";
@@ -1516,6 +1642,9 @@ async function cmdAutotrade() {
   const policy = validateAutoTrade(loadPolicy(file, { hint: "Create one with: node scripts/aacp-quant.mjs apply-template --agent <agentId>" }));
   const dryRun = args.includes("--dry-run");
   const isWorker = args.includes("--worker");
+  // Opt-in: the user authorises it at start, with the exposure, like the trading.
+  // On by default: an undelivered fee order pays the provider nothing and is refundable after its deadline.
+  const autoDeliver = !args.includes("--no-auto-deliver");
   const state = loadState(QUANT_STATE_FILE);
 
   if (sub === "once") {
@@ -1547,6 +1676,9 @@ async function cmdAutotrade() {
           slippage: `${policy.slippagePct}%`,
           decidesEvery: `${policy.intervalSeconds}s`,
         },
+        autoDeliver: autoDeliver
+          ? "ON: when the job is over (term ended, revoked or expired) the worker reports the recorded reasons and broadcasts the fee order's on-chain delivery itself, without asking."
+          : "off (--no-auto-deliver): when the job is over the worker stops and prints the report command; the fee is only paid once you run it.",
         warning:
           "This trades a CLIENT'S money with no per-trade confirmation. Read the exposure above back to the user, " +
           "then re-run with --confirm only if they agree.",
@@ -1570,7 +1702,7 @@ async function cmdAutotrade() {
 
     const logFile = logFilePath(scope);
     const fd = openSync(logFile, "a");
-    const childArgs = [fileURLToPath(import.meta.url), "autotrade", "start", "--worker", "--confirm", "--job", jobId, "--agent", agentId, "--config", file];
+    const childArgs = [fileURLToPath(import.meta.url), "autotrade", "start", "--worker", "--confirm", "--job", jobId, "--agent", agentId, "--config", file, ...(autoDeliver ? [] : ["--no-auto-deliver"])];
     const child = spawn(process.execPath, childArgs, { detached: true, stdio: ["ignore", fd, fd], env: process.env });
     writePid(scope, child.pid);
     child.unref();
@@ -1601,6 +1733,10 @@ async function cmdAutotrade() {
       process.stderr.write(`[autotrade] tick failed (${row.consecutiveFailures}): ${await llmDiagnose(err, `quant autotrade job ${jobId}`)}\n`);
       if (terminal || row.consecutiveFailures >= policy.stopAfterConsecutiveFailures) {
         console.log(JSON.stringify({ event: "quant.stopped", jobId, reason: message, failures: row.consecutiveFailures }));
+        // A job that is really over still owes its delivery (a revoked one too:
+        // the fee pays for the term). Only a job that is over: a run of
+        // transient failures may still be fixed and resumed within the term.
+        if (terminal) console.log(JSON.stringify(await deliverOnStop(jobId, state, autoDeliver)));
         saveState(QUANT_STATE_FILE, state);
         stopWorker(scope);
         process.exit(terminal ? 0 : 1);
@@ -1618,6 +1754,7 @@ const COMMANDS = {
   "apply-template": cmdApplyTemplate,
   apply: cmdApply,
   inbox: cmdInbox,
+  accept: cmdAccept,
   job: cmdJob,
   trades: cmdTrades,
   report: cmdReport,

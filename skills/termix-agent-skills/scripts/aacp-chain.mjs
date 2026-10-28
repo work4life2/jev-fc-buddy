@@ -48,7 +48,8 @@ export const CHAINS = {
     network: "BSC Mainnet",
     chainId: 56,
     apiBaseUrl: "https://platform-backend.prod.termix.live",
-    rpcUrl: "https://bsc-rpc.publicnode.com",
+    // publicnode stopped serving eth_getTransactionReceipt without a token (2026-10).
+    rpcUrl: "https://bsc-dataseed.bnbchain.org",
     explorer: "https://bscscan.com",
     nativeCurrency: "BNB",
     quant: true,
