@@ -336,7 +336,10 @@ async function handleApi(req: http.IncomingMessage, res: http.ServerResponse, ur
       return;
     }
     if (req.method === "GET" && p === "/api/admin/orders") {
-      json(res, 200, { orders: listJobs().slice(0, 200) });
+      // ?status=disputed,delivered returns every job in those states: the newest 200 alone hid an
+      // October dispute behind the 10-26 bot flood. Without it: the newest 200, as the dashboard uses.
+      const want = (url.searchParams.get("status") ?? "").split(",").filter(Boolean);
+      json(res, 200, { orders: want.length ? listJobs().filter((j) => want.includes(j.status)) : listJobs().slice(0, 200) });
       return;
     }
   }
