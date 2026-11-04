@@ -44,6 +44,8 @@ export interface Job {
   notes: string[];
   redo?: RedoRecord;
   dispute?: DisputeRecord;
+  /** When escrow paid out (our claim, the buyer's release or a dispute ruling); updatedAt keeps moving. */
+  settledAt?: string;
 }
 
 export interface ConversationLog {
@@ -69,6 +71,13 @@ export function createJob(init: Pick<Job, "orderId"> & Partial<Job>): Job {
   const job: Job = { id: `order-${init.orderId}`, status: "queued", createdAt: now, updatedAt: now, artifactIds: [], txHashes: {}, notes: [], ...init };
   saveJob(job);
   return job;
+}
+
+/** Mark a job settled, keeping the settlement time separate from updatedAt. */
+export function markSettled(job: Job, at?: string): void {
+  job.status = "settled";
+  job.settledAt = at && !Number.isNaN(Date.parse(at)) ? at : new Date().toISOString();
+  saveJob(job);
 }
 
 export function saveJob(job: Job): void {

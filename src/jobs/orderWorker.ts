@@ -8,7 +8,7 @@ import { sleep } from "../util/exec.js";
 import { termix, type RemoteConversation, type TxIntent } from "../termix/client.js";
 import { codesForOrder, coinsForPrice, findCodeByOrder, isUsed, mintCode, revokeCode, type CoinCode } from "../coins/store.js";
 import { playableGames } from "../games/registry.js";
-import { createJob, findJobByOrder, loadConversation, saveJob, type Job } from "./store.js";
+import { createJob, findJobByOrder, listJobs, loadConversation, markSettled, saveJob, type Job } from "./store.js";
 import { postNotice } from "./chat.js";
 
 const log = logger("order");
@@ -405,8 +405,7 @@ export async function claimExpiredDeliveries(): Promise<number> {
       const job = findJobByOrder(o.id);
       if (job) {
         job.txHashes.claimAfterTimeout = r.results?.[0]?.txHash ?? "";
-        job.status = "settled";
-        saveJob(job);
+        markSettled(job);
       }
       claimed++;
       await notify("order.claimed", { orderId: o.id, tx: r.results?.[0]?.txHash });
@@ -512,9 +511,35 @@ export async function sweepOrders(): Promise<string[]> {
       if (typeof o.latestTxHash === "string") job.txHashes.submitDelivery ??= o.latestTxHash;
       saveJob(job);
     } else if (o.status === "SETTLED" && job && job.status !== "settled") {
-      job.status = "settled";
-      saveJob(job);
+      markSettled(job, typeof o.updatedAt === "string" ? o.updatedAt : undefined);
     }
   }
+  await reconcileUnlisted(new Set(items.map((o) => o.id)));
   return actionable;
+}
+
+const unexpectedWarned = new Set<string>();
+
+/**
+ * Orders the buyer released, or that a dispute ruling closed, drop out of every list above once they
+ * are older than the head scan, so their jobs stayed "delivered" / "disputed" forever (same gap holo
+ * had, fixed there in e00e34a). Ask the platform about each such job directly.
+ */
+async function reconcileUnlisted(seen: Set<string>): Promise<void> {
+  const stale = listJobs().filter((j) => (j.status === "delivered" || j.status === "disputed") && !j.orderId.startsWith("local") && !seen.has(j.orderId));
+  for (const job of stale) {
+    try {
+      const o = await getOrder(job.orderId);
+      if (o.status === "SETTLED") {
+        log.info(`order ${o.id}: SETTLED on the platform (buyer release or dispute ruling), marking job ${job.id} settled (was ${job.status})`);
+        markSettled(job, typeof o.updatedAt === "string" ? o.updatedAt : undefined);
+      } else if (!["DELIVERED", "IN_PROGRESS", "IN_DISPUTE"].includes(o.status) && !unexpectedWarned.has(o.id)) {
+        // Not a payout (e.g. refunded after a dispute, EXPIRED): leave the job as is so the operator sees it.
+        unexpectedWarned.add(o.id);
+        log.warn(`order ${o.id}: platform status ${o.status}, job ${job.id} left as ${job.status}`);
+      }
+    } catch (err) {
+      log.warn(`order ${job.orderId}: could not reconcile ${job.status} job — ${String(err)}`);
+    }
+  }
 }
