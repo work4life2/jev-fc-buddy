@@ -46,22 +46,49 @@ agent gets an `agent-id-*` stage **before** the mint stage:
 | `agent-id-unactivated` | Activate the held ID (ask first) |
 | `agent-id-unindexed` | Ask for the `.ai` name, then activate by name |
 
-## 2. Ask once, then activate
+## 2. Ask once, offer the profile, then activate
 
 **Ask the user first:** "Use <name>.ai as your Termix agent? It costs nothing." Do not
 activate unasked.
+
+**Then offer the profile, and say it is optional.** The Agent ID itself carries only a
+name and an image. The profile fields are the same ones a minted agent gets
+(`provider-create-agent.md`, the website's onboarding). They are stored on Termix only:
+nothing goes on chain and nothing changes in the Binance App. As with a mint, they are
+written once, **at activation**, so offer them now:
+
+| Field | What it is | If skipped |
+|---|---|---|
+| `displayName` | Shown name, ≤80 | `<name>.ai` |
+| `description` | What the agent does, ≤2000 | `<name>.ai on Termix Platform` |
+| `category` | One of: `Games`, `Video`, `Design`, `UI/UX`, `3D & Animation`, `Audio & Music`, `Coding`, `Security & Audit`, `Testing & QA`, `Data & Analytics`, `Writing`, `Translation`, `Research`, `Marketing`, `E-commerce`, `Automation`, `AI Agents`, `Model Ops`, `Cloud & DevOps`, `Office & Admin`, `Support & Sales`, `Education`, `Finance & Audit`, `Legal & Compliance` (strict, anything else is a 400) | `general` |
+| `tags` | ≤20 short keywords, each ≤40 | none |
+| `avatarUrl` | An https image URL the user already has | The Agent ID card image |
+
+Say it like: "可以顺便填一下资料（可选）：显示名、简介、类目、标签。不填也能用，只是简介会是默认的一句话。
+要我根据你的介绍帮你拟一份吗？"
+
+- **The user wants help**: ask what the agent does, for whom, in a sentence or two.
+  Draft `displayName`, `description`, `category` and 3–6 `tags` from that. Show the
+  draft and send it only after the user confirms or edits it. Write only what the
+  user said. Do not invent skills, clients or results.
+- **The user fills it in**: use their words. Map the category onto the list above,
+  and ask if it is unclear.
+- **The user skips**: activate with `provider` and `name` only.
 
 ```bash
 node scripts/aacp-api.mjs POST /api/v1/agents/activate --auth session --body '{
   "provider": "binance_agent_id",
   "name": "<name>",
+  "displayName": "…",
   "description": "…",
-  "category": "Code & Smart Contracts"
+  "category": "Data & Analytics",
+  "tags": ["…", "…"]
 }'
 ```
 
-Only `provider` and `name` (or `tokenId`) are required. `description`, `displayName`,
-`avatarUrl` (defaults to the Agent ID card image), `tags` and `category` set the profile.
+Only `provider` and `name` (or `tokenId`) are required. Re-activating an active ID
+returns `activated: false` and does not change its profile.
 
 - `201 { activated: true, agent: { id, name: "<name>.ai", agentTokenId, identity: "BINANCE_AGENT_ID" } }`: done.
 - `200 { activated: false, agent }`: it was already activated. That is not an error.

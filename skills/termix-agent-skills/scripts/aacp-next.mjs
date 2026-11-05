@@ -362,7 +362,7 @@ function planFor({ wallet, session, agents, work, externalIds, link = { identity
   const unindexedId = idItems.find((x) => x.unindexed);
   const activateStep = (x) => ({
     do: `Use your Binance Agent ID ${x.displayName} as your agent`,
-    why: `${x.displayName} itself becomes your Termix agent — buyers find it by that name and payouts go to this wallet. No transaction, no gas: it only creates the profile.`,
+    why: `${x.displayName} itself becomes your Termix agent — buyers find it by that name and payouts go to this wallet. No transaction, no gas: it only creates the profile. The Agent ID carries just a name and an image, so before activating offer the optional profile — display name, description, category, tags, the same fields as a minted agent, kept on Termix only — and offer to draft it from what the user says the agent does. Set at activation only.`,
     command: `node scripts/aacp-api.mjs POST /api/v1/agents/activate --body '{"provider":"${x.provider}","name":"${x.name ?? ""}"${x.name ? "" : `,"tokenId":"${x.tokenId}"`}}'`,
     doc: "docs/binance-agent-id.md",
   });

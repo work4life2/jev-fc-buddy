@@ -5,6 +5,7 @@ import { createTextSession, promptForText } from "../agent/session.js";
 import { termix, type WatchEvent } from "../termix/client.js";
 import { playableGames } from "../games/registry.js";
 import { findJobByOrder, loadConversation, saveConversation } from "./store.js";
+import { fromBot, NO_REPLY_RULE, replyOrSilence, skipReason } from "./agentChat.js";
 
 const log = logger("chat");
 
@@ -52,6 +53,11 @@ export async function handleChatMessage(ev: WatchEvent): Promise<void> {
   conv.buyer = senderName(ev.from);
   conv.messages.push({ role: "buyer", text, at: new Date().toISOString(), messageId: ev.messageId });
   saveConversation(conv);
+  const skip = skipReason(ev, conv.messages);
+  if (skip) {
+    log.info(`no reply in ${conversationId}: ${skip}`);
+    return;
+  }
 
   const tx = termix();
   await tx.signal(conversationId);
@@ -66,7 +72,7 @@ export async function handleChatMessage(ev: WatchEvent): Promise<void> {
       .slice(-16)
       .map((m) => `${m.role === "buyer" ? conv.buyer : "You"}: ${m.text}`)
       .join("\n");
-    const prompt = `Context:\n${context.join("\n")}\n\nConversation so far (chronological; "You" is us):\n${history}\n\nWrite your next reply to the buyer (reply text only).`;
+    const prompt = `Context:\n${context.join("\n")}\n\nConversation so far (chronological; "You" is us):\n${history}\n\n${fromBot(ev) ? `${NO_REPLY_RULE}\n\n` : ""}Write your next reply to the buyer (reply text only).`;
     const session = await createTextSession("chat", chatSystemPrompt(), { thinking: "off" });
     let reply: string;
     try {
@@ -74,7 +80,12 @@ export async function handleChatMessage(ev: WatchEvent): Promise<void> {
     } finally {
       session.dispose();
     }
-    if (!reply) reply = "Got it — one moment please.";
+    const kept = replyOrSilence(reply, ev);
+    if (kept === null) {
+      log.info(`no reply in ${conversationId}: the model judged it needs none`);
+      return;
+    }
+    reply = kept || "Got it — one moment please.";
     await tx.reply(conversationId, reply, ev.messageId ? `auto-${ev.messageId}` : undefined);
     conv.messages.push({ role: "agent", text: reply, at: new Date().toISOString() });
     saveConversation(conv);

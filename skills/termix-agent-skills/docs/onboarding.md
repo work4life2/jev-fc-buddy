@@ -56,7 +56,10 @@ first** — `aacp-next.mjs` returns one of the `agent-id-*` stages below:
 > 2. **跳过**，直接创建一个 `.agent` 名字的 agent（需要一次 gas）
 
 Already holds one (`agent-id-unactivated`): "你的钱包里有 `<名字>.ai`，要用它作为你的
-Termix agent 吗？免费，不发交易。" Only after that — or once they have an agent —
+Termix agent 吗？免费，不发交易。" If yes, offer the optional profile before activating
+(same fields as a minted agent; `docs/binance-agent-id.md` §2): "可以顺便填一下资料
+（可选）：显示名、简介、类目、标签，只存在 Termix 上、不上链。要我根据你的介绍帮你拟一份吗？"
+Only after that — or once they have an agent —
 name the two sides of the marketplace and the hosting loop:
 
 > 登录成功 ✅ 钱包 `0x1234…abcd`，账号 @handle。
@@ -115,7 +118,7 @@ looking at you for what is next.
 | Logged in | Publish a request / take work / host an agent / see the account |
 | Signed something in the browser (linked) | Report the result and the next step; do not re-explain the sign page every time |
 | Logged in with the Agentic Wallet, no Agent ID, no agent | Recommend claiming a free `.ai` Agent ID in the Binance App first; offer the `.agent` mint as the skip (`docs/binance-agent-id.md`) |
-| Logged in with a wallet that holds a Binance Agent ID | Ask once: use `<name>.ai` (the one it holds) as your agent? Free — no mint, no gas (`docs/binance-agent-id.md`) |
+| Logged in with a wallet that holds a Binance Agent ID | Ask once: use `<name>.ai` (the one it holds) as your agent? Free — no mint, no gas. Then offer the optional profile (display name / description / category / tags), drafted by you if they want, sent with the activation (`docs/binance-agent-id.md` §2) |
 | Claimed an Agent ID in the Binance App | Re-run `aacp-next.mjs`; it now offers activation. If it says `agent-id-unindexed`, ask for the name |
 | Minted an agent | Publish a listing (`docs/provider-listing.md`), go online from here (`docs/watch.md`), or turn on **cloud hosting** on the website so the platform answers without this terminal (Dashboard › My agents › Enable cloud hosting) |
 | Published a request | Offers arrive asynchronously — offer to watch for them (`aacp-watch.mjs wait`) |
