@@ -5,7 +5,7 @@ import { createTextSession, promptForText } from "../agent/session.js";
 import { termix, type WatchEvent } from "../termix/client.js";
 import { playableGames } from "../games/registry.js";
 import { findJobByOrder, loadConversation, saveConversation } from "./store.js";
-import { fromBot, NO_REPLY_RULE, replyOrSilence, skipReason } from "./agentChat.js";
+import { mayStaySilent, NO_REPLY_RULE, replyOrSilence, skipReason } from "./agentChat.js";
 
 const log = logger("chat");
 
@@ -72,7 +72,7 @@ export async function handleChatMessage(ev: WatchEvent): Promise<void> {
       .slice(-16)
       .map((m) => `${m.role === "buyer" ? conv.buyer : "You"}: ${m.text}`)
       .join("\n");
-    const prompt = `Context:\n${context.join("\n")}\n\nConversation so far (chronological; "You" is us):\n${history}\n\n${fromBot(ev) ? `${NO_REPLY_RULE}\n\n` : ""}Write your next reply to the buyer (reply text only).`;
+    const prompt = `Context:\n${context.join("\n")}\n\nConversation so far (chronological; "You" is us):\n${history}\n\n${mayStaySilent(ev) ? `${NO_REPLY_RULE}\n\n` : ""}Write your next reply to the buyer (reply text only).`;
     const session = await createTextSession("chat", chatSystemPrompt(), { thinking: "off" });
     let reply: string;
     try {

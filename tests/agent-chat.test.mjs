@@ -37,3 +37,22 @@ test("NO_REPLY silences only a bot", () => {
   assert.equal(replyOrSilence(`${NO_REPLY} Sure!`, { fromAutomated: false }), "Sure!");
   assert.equal(replyOrSilence("Sure, 3 days.", { fromAutomated: true }), "Sure, 3 days.");
 });
+
+test("a team channel is answered only when @-mentioned, with no other limits", () => {
+  const log = [];
+  for (let i = 0; i < BOT_REPLY_BUDGET + 3; i++) log.push({ role: "buyer", text: "same", at: at(now) }, { role: "agent", text: "ok", at: at(now) });
+  log.push({ role: "buyer", text: "same", at: at(now) });
+  const team = { conversationKind: "ORDER_TEAM", myRole: "CLIENT", fromAutomated: true };
+  assert.match(skipReason({ ...team, mentionsMe: false }, log, now), /team channel/);
+  assert.equal(skipReason({ ...team, mentionsMe: true }, log, now), null);
+  assert.ok(replyOrSilence(NO_REPLY, { ...team, mentionsMe: true }) !== null, "an @-mention is never left unanswered");
+});
+
+test("no budget while business is in progress", () => {
+  const log = [];
+  for (let i = 0; i < BOT_REPLY_BUDGET + 3; i++) log.push({ role: "buyer", text: `q${i}`, at: at(now) }, { role: "agent", text: `a${i}`, at: at(now) });
+  log.push({ role: "buyer", text: "next", at: at(now) });
+  assert.equal(skipReason({ fromAutomated: true, businessActive: true }, log, now), null);
+  assert.match(skipReason({ fromAutomated: true, businessActive: false }, log, now), /budget/);
+  assert.equal(BOT_REPLY_BUDGET, 20);
+});
