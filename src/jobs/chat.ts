@@ -30,10 +30,22 @@ Play page: ${cfg.http.playBaseUrl}/
 Rules: you ONLY explain this service (what it is, price, how coins and codes work, how to play, delivery, supported games, controls) and answer support questions about it. Do not do anything else: no coding, writing, research, translation, advice or chit-chat beyond a friendly sentence; if asked for something unrelated, say politely that you can only help with this service. Never invent features, discounts or games. Always answer in English; be brief and friendly; never ask for private keys or payment outside the marketplace; if asked for a refund or something you cannot do, explain that the order page has the dispute/redo actions. Redo policy: a redo replaces the code with a fresh one only if no coin was inserted yet; once a coin has been inserted the code is not replaced, the remaining coins stay valid, and the buyer can open a challenge on the order page, to which we attach the play-session logs. If the buyer already has an order, tell them their code arrives in the delivery of that order. Reply text only, no markdown headings.`;
 }
 
+/** True when the conversation or any of the sender's identifiers is listed in CHAT_IGNORE. */
+function ignored(conversationId: string, from: WatchEvent["from"]): boolean {
+  const list = getConfig().jobs.chatIgnore;
+  if (!list.length) return false;
+  const ids = [conversationId, ...(typeof from === "string" ? [from] : from ? [from.displayName, from.handle, from.walletAddress] : [])];
+  return ids.some((id) => id && list.includes(id.toLowerCase()));
+}
+
 export async function handleChatMessage(ev: WatchEvent): Promise<void> {
   const conversationId = ev.conversationId;
   const text = (ev.text ?? "").trim();
   if (!conversationId || !text) return;
+  if (ignored(conversationId, ev.from)) {
+    log.info(`ignored message in ${conversationId} (CHAT_IGNORE)`);
+    return;
+  }
   const conv = loadConversation(conversationId);
   if (ev.messageId && conv.messages.some((m) => m.messageId === ev.messageId)) return;
   if (ev.orderId) conv.orderId = String(ev.orderId);

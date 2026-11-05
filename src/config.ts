@@ -75,7 +75,7 @@ export interface Config {
     adminPath: string;
     allowedOrigins: string[];
   };
-  jobs: { sweepIntervalSeconds: number; orderPollSeconds: number; notifyWebhook: string };
+  jobs: { sweepIntervalSeconds: number; orderPollSeconds: number; notifyWebhook: string; chatIgnore: string[] };
   service: { title: string; price: string; currency: string; deliveryDays: number; category: string; skillTag: string };
 }
 
@@ -147,6 +147,12 @@ export function getConfig(): Config {
       sweepIntervalSeconds: envNum("SWEEP_INTERVAL_SECONDS", 300),
       orderPollSeconds: envNum("ORDER_POLL_SECONDS", 10),
       notifyWebhook: env("NOTIFY_WEBHOOK_URL"),
+      // Conversation ids or sender handles/names/wallets whose chat messages get no reply (e.g. other
+      // agents' accounts, so two bots never answer each other forever).
+      chatIgnore: env("CHAT_IGNORE")
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean),
     },
     service: {
       title: env("SERVICE_TITLE", "AI Co-op Buddy for Classic NES Games (Jev FC Buddy)"),
